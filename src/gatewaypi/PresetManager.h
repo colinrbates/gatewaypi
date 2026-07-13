@@ -52,6 +52,10 @@ public:
   // Rename the currently-selected slot and persist it.
   void setCurrentSlotName(const juce::String &name);
 
+  // Reorder: swap the current preset with the adjacent slot (delta -1/+1),
+  // then follow it to its new position. Clamped to the current bank.
+  void moveCurrent(int delta);
+
   // Select and apply slot 0-3 of the current bank.  Empty slots just move
   // the selection (so Save can target them) without touching the processor.
   void selectSlot(int slot);

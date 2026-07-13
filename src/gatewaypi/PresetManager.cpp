@@ -204,6 +204,47 @@ void PresetManager::setCurrentSlotName(const juce::String &name) {
     onChanged();
 }
 
+void PresetManager::moveCurrent(int delta) {
+  const int target = juce::jlimit(0, kSlotsPerBank - 1, mSlot + delta);
+  if (target == mSlot)
+    return;
+
+  maybeAutosave(); // make sure the current slot's edits are on disk first
+
+  const auto srcFile = slotFile(mBank, mSlot);
+  const auto dstFile = slotFile(mBank, target);
+
+  auto payload = [this](const juce::File &f, int slot) -> juce::String {
+    if (f.existsAsFile())
+      return f.loadFileAsString();
+    // An empty slot: a placeholder preset with the default name.
+    auto *o = new juce::DynamicObject();
+    o->setProperty("name",
+                   juce::String("Preset ") + juce::String(slotNumber(mBank, slot)));
+    o->setProperty("customName", false);
+    o->setProperty("model", "");
+    o->setProperty("ir", "");
+    return juce::JSON::toString(juce::var(o), false);
+  };
+
+  const juce::String src = payload(srcFile, mSlot);
+  const juce::String dst = payload(dstFile, target);
+  srcFile.replaceWithText(dst); // slot positions (NN prefixes) stay put...
+  dstFile.replaceWithText(src); // ...only the contents swap
+
+  mSlot = target; // follow the moved preset to its new home
+  if (isSlotOccupied(mSlot))
+    applySlot(mSlot);
+  else {
+    mProcessor.clearModel();
+    mProcessor.clearIR();
+    mPersistedSnapshot = snapshot();
+    persistState();
+    if (onChanged)
+      onChanged();
+  }
+}
+
 void PresetManager::maybeAutosave() {
   if (!mConfig.autosavePresets)
     return;

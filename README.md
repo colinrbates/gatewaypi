@@ -51,6 +51,10 @@ installer is idempotent — safe to re-run after changing anything.
   nickname becomes the capture's filename; swap the capture and the name
   updates too. Long-press a slot to type a custom name — that pins it
   (`customName` in the preset JSON), so swapping captures won't rename it.
+- **Reorder presets**: long-press a slot and use **◀ MOVE / MOVE ▶** to swap
+  it with the neighbouring slot (its whole state — capture, IR, dials, name —
+  moves with it). Or edit the `NN-` prefix of the files in
+  `/var/lib/gatewaypi/presets/` over SSH/SFTP.
 - **Footswitches — no pedal programming needed**: tap **LEARN**, tap an
   action (Preset 1-4, bank up/down, bypass, tuner), press a footswitch —
   the app binds whatever the pedal sends (PC, CC or note) and remembers it

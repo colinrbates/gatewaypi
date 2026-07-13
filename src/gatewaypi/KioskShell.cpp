@@ -241,6 +241,10 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
     juce::Logger::setCurrentLogger(juce::FileLogger::createDefaultAppLogger(
         "GatewayPi", "juce.log", "GatewayPi JUCE log"));
 
+  // Bigger text on all the kiosk chrome (bar + overlays inherit this); the
+  // inner amp panel sets its own look, so it's unaffected.
+  setLookAndFeel(&mLnf);
+
   mPresets->onChanged = [this] { refresh(); };
   mBar.onOpenAudioSettings = [this] { openAudioSettings(); };
   mBar.onOpenMidiLearn = [this] { openMidiLearn(); };
@@ -275,6 +279,7 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
 KioskShell::~KioskShell() {
   mMidi.reset(); // stop MIDI callbacks before anything else goes away
   mPresets->onChanged = nullptr;
+  setLookAndFeel(nullptr); // clear before mLnf is destroyed
 }
 
 void KioskShell::paint(juce::Graphics &g) { g.fillAll(colours::bg); }
@@ -625,6 +630,10 @@ void KioskShell::openRename(int slot) {
     mKeyboard->onAccept = [this](juce::String name) {
       mPresets->setCurrentSlotName(name);
       mKeyboard->setVisible(false);
+    };
+    mKeyboard->onMove = [this](int delta) {
+      mPresets->moveCurrent(delta);
+      mKeyboard->setVisible(false); // reorder done; back to playing
     };
     addChildComponent(*mKeyboard);
   }
@@ -1062,6 +1071,21 @@ KeyboardOverlay::KeyboardOverlay() {
   };
   addAndMakeVisible(mAccept);
 
+  // Reorder controls: move this preset one slot left/right.
+  for (auto *m : {&mMoveLeft, &mMoveRight}) {
+    m->setColour(juce::TextButton::buttonColourId, colours::signalBlue);
+    m->setColour(juce::TextButton::textColourOffId, colours::text);
+    addAndMakeVisible(*m);
+  }
+  mMoveLeft.onClick = [this] {
+    if (onMove)
+      onMove(-1);
+  };
+  mMoveRight.onClick = [this] {
+    if (onMove)
+      onMove(1);
+  };
+
   rebuildKeys();
 }
 
@@ -1139,6 +1163,15 @@ void KeyboardOverlay::resized() {
   mPromptLabel.setBounds(area.removeFromTop(line));
   mTextLabel.setBounds(area.removeFromTop(juce::jmax(44, line + 16)));
   area.removeFromTop(gap);
+
+  // Reorder row, just under the name field.
+  {
+    auto row = area.removeFromTop(juce::jmax(40, line + 8));
+    const int w = (row.getWidth() - gap) / 2;
+    mMoveLeft.setBounds(row.removeFromLeft(w));
+    mMoveRight.setBounds(row.removeFromRight(w));
+    area.removeFromTop(gap);
+  }
 
   auto footer = area.removeFromBottom(juce::jmax(48, line + 14));
   {

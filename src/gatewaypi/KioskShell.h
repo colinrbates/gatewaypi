@@ -23,6 +23,16 @@
 
 namespace gatewaypi {
 
+// Bigger, bolder button/label text than JUCE's defaults — the stock cap is
+// ~16 px, which is hard to read on a small touchscreen at arm's length.
+// Applied to the kiosk chrome only; the amp panel keeps its own look.
+struct GatewayPiLookAndFeel : juce::LookAndFeel_V4 {
+  juce::Font getTextButtonFont(juce::TextButton &, int buttonHeight) override {
+    return juce::Font(juce::FontOptions(
+        juce::jlimit(18.0f, 34.0f, buttonHeight * 0.5f), juce::Font::bold));
+  }
+};
+
 // Touch-first strip shown above the stock Gateway/NAMix panel: four preset
 // buttons (one per Chocolate footswitch), bank navigation, bypass/mute,
 // save, audio settings and shutdown.
@@ -84,6 +94,7 @@ public:
 
   std::function<void(juce::String)> onAccept;
   std::function<void()> onCancel;
+  std::function<void(int)> onMove; // reorder: -1 = move left, +1 = move right
 
 private:
   void addKey(const juce::String &cap, std::function<void()> action);
@@ -94,6 +105,8 @@ private:
   bool mShift = true; // start capitalised (amp names read nicer)
   juce::Label mPromptLabel, mTextLabel;
   juce::OwnedArray<juce::TextButton> mKeys;      // rebuilt on shift toggle
+  juce::TextButton mMoveLeft{juce::String::fromUTF8("\xe2\x97\x80 MOVE")};
+  juce::TextButton mMoveRight{juce::String::fromUTF8("MOVE \xe2\x96\xb6")};
   juce::TextButton mCancel{"CANCEL"}, mAccept{"SAVE"};
 };
 
@@ -203,6 +216,7 @@ private:
 
   NAMixAudioProcessor &mProcessor;
   Config mConfig;
+  GatewayPiLookAndFeel mLnf; // bigger text on the kiosk chrome
   std::shared_ptr<PresetManager> mPresets;
   std::unique_ptr<MidiEngine> mMidi;
   PresetBar mBar;
