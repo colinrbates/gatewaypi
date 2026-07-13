@@ -319,16 +319,29 @@ void KioskShell::timerCallback() { configureAudioDevice(); }
 
 void KioskShell::configureAudioDevice() {
 #if JucePlugin_Build_Standalone
-  if (mAudioDeviceConfigured || mConfig.audioDeviceMatch.isEmpty())
-    return;
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
+    return;
+
+  // JUCE standalones default to muting the audio input as feedback
+  // protection.  This is a guitar amp: the input IS the instrument.
+  holder->shouldMuteInput.setValue(false);
+
+  if (mAudioDeviceConfigured || mConfig.audioDeviceMatch.isEmpty())
     return;
 
   auto &dm = holder->deviceManager;
   auto setup = dm.getAudioDeviceSetup();
 
-  if (setup.inputDeviceName.containsIgnoreCase(mConfig.audioDeviceMatch) &&
+  // Configured only counts if the names match AND the input is actually
+  // live — a matching device with zero active input channels is still a
+  // silent amp (this happens when the interface was plugged in after the
+  // app scanned, or the saved setup lost its input).
+  auto *current = dm.getCurrentAudioDevice();
+  const bool inputLive =
+      current != nullptr && !current->getActiveInputChannels().isZero();
+  if (inputLive &&
+      setup.inputDeviceName.containsIgnoreCase(mConfig.audioDeviceMatch) &&
       setup.outputDeviceName.containsIgnoreCase(mConfig.audioDeviceMatch)) {
     mAudioDeviceConfigured = true;
     return;
