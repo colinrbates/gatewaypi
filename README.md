@@ -24,7 +24,7 @@ shell, boot-to-app system integration, and model/IR import.
 Flash **Raspberry Pi OS Lite (64-bit)**, boot, get on the network, then:
 
 ```sh
-git clone <this-repo> gatewaypi && cd gatewaypi
+git clone https://github.com/colinrbates/gatewaypi.git && cd gatewaypi
 sudo ./install.sh
 sudo reboot
 ```
