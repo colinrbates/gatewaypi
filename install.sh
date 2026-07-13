@@ -81,6 +81,15 @@ else
   echo "    patch already applied (or tree dirty from a previous run) — continuing"
 fi
 
+# Apply the JUCE realtime-audio patch to the JUCE submodule (gives the ALSA
+# I/O thread SCHED_FIFO so it doesn't xrun/crackle). Applied in the JUCE dir.
+if git -C JUCE apply --check "$BUNDLE_DIR/patches/juce-alsa-realtime.patch" 2>/dev/null; then
+  git -C JUCE apply "$BUNDLE_DIR/patches/juce-alsa-realtime.patch"
+  echo "    JUCE realtime patch applied"
+else
+  echo "    JUCE realtime patch already applied — continuing"
+fi
+
 # Appliance sources (always refreshed from the bundle).
 rm -rf src/gatewaypi
 cp -R "$BUNDLE_DIR/src/gatewaypi" src/

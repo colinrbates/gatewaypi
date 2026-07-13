@@ -107,8 +107,17 @@ Presets are plain JSON in `/var/lib/gatewaypi/presets/`, named `NN-name.json`
 - **No input signal**: the installer masks PipeWire/PulseAudio so they can't
   grab the USB interface; if you re-enabled desktop audio, the amp and the
   desktop will fight over the device.
-- **Crackles/xruns**: raise `bufferSize` to 256; check the interface is on a
-  USB 3 port by itself; confirm `threadirqs` is in `/boot/firmware/cmdline.txt`.
+- **Crackles/xruns**: the audio thread runs SCHED_FIFO/RR real-time (JUCE
+  patch + the @audio rtprio limit); confirm with
+  `ps -o tid,rtprio,cls -L -p $(pgrep -x gatewaypi)` — you should see one
+  thread with a non-empty RTPRIO and class RR/FF. If not, check `pi` is in
+  the `audio` group and `/etc/security/limits.d/95-gatewaypi-audio.conf`
+  exists. Confirm `threadirqs` is in `/boot/firmware/cmdline.txt`.
+- **Note on power**: a crackle that is ALSO present in a direct
+  `aplay -D hw:CARD=<iface>,DEV=0` test (bypassing the app) is hardware/
+  power — use the official 27W/5A Pi 5 supply or a powered USB hub for a
+  bus-powered interface. A crackle only through the app is the RT-thread
+  issue above.
 - **Boots to the Raspberry Pi desktop instead of the amp**: you're on a
   desktop image and installed with an older installer — run
   `sudo systemctl disable lightdm && sudo reboot` (or re-run `install.sh`,

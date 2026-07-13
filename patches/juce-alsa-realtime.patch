@@ -1,0 +1,22 @@
+diff --git a/modules/juce_audio_devices/native/juce_ALSA_linux.cpp b/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
+index 84e0696..39180e9 100644
+--- a/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
++++ b/modules/juce_audio_devices/native/juce_ALSA_linux.cpp
+@@ -630,7 +630,16 @@ public:
+         if (outputDevice != nullptr && JUCE_ALSA_FAILED (snd_pcm_prepare (outputDevice->handle)))
+             return;
+ 
+-        startThread (Priority::high);
++        // GatewayPi: the audio I/O thread must run under SCHED_FIFO or it
++        // gets preempted and xruns (crackle). Priority::high is only a nice
++        // value on Linux, so request a genuine realtime thread; fall back to
++        // the high-priority time-sharing thread if RT is not permitted.
++        const double periodMs = (sampleRate > 0.0 && bufferSize > 0)
++                                    ? 1000.0 * bufferSize / sampleRate
++                                    : 1.5;
++        if (! startRealtimeThread (RealtimeOptions{}.withPriority (9)
++                                       .withPeriodMs (periodMs)))
++            startThread (Priority::high);
+ 
+         int count = 1000;
+ 
