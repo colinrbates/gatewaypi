@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d88f9d7..a5b1832 100644
+index d88f9d7..86b8f6d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
@@ -11,6 +11,15 @@ index d88f9d7..a5b1832 100644
  set(CMAKE_CXX_STANDARD 20)
  set(CMAKE_CXX_STANDARD_REQUIRED ON)
  set(CMAKE_CXX_EXTENSIONS OFF)
+@@ -51,7 +53,7 @@ target_include_directories(NamDsp PUBLIC
+     eigen
+ )
+ 
+-target_compile_options(NamDsp PRIVATE -ffast-math -Wno-unused-parameter -fPIC $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>)
++target_compile_options(NamDsp PRIVATE -ffast-math -fsigned-char -Wno-unused-parameter -fPIC $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>)
+ 
+ # ---------------------------------------------------------------------------
+ # Embedded font resources (Michroma-Regular and Roboto-Regular, copied from
 @@ -122,19 +124,25 @@ target_include_directories(NAMixLinux PRIVATE
  # ---------------------------------------------------------------------------
  # Link libraries
@@ -43,7 +52,13 @@ index d88f9d7..a5b1832 100644
          juce::juce_recommended_warning_flags
  )
  
-@@ -147,3 +155,21 @@ target_compile_options(NAMixLinux PRIVATE
+@@ -143,7 +151,27 @@ target_link_libraries(NAMixLinux
+ # ---------------------------------------------------------------------------
+ target_compile_options(NAMixLinux PRIVATE
+     -ffast-math
++    # WDL assumes signed char; ARM Linux defaults to unsigned
++    -fsigned-char
+     -Wall
      -Wno-unused-parameter
      $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>
  )
