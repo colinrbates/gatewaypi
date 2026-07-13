@@ -359,11 +359,39 @@ static void gpTrace(const juce::String &msg) {
 
 // Hardware, full-duplex devices only: names present in BOTH the input and
 // output lists, excluding the PulseAudio/JACK/resampler pseudo-devices.
+// True when jackd is running and JUCE sees a JACK device — in that mode
+// jackd owns the interface and the raw ALSA hw devices must NOT be opened
+// (doing so steals the card from jackd and kills the audio).
+bool gpJackAvailable() {
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  if (holder == nullptr)
+    return false;
+  for (auto *type : holder->deviceManager.getAvailableDeviceTypes())
+    if (type->getTypeName() == "JACK") {
+      type->scanForDevices();
+      if (!type->getDeviceNames(false).isEmpty())
+        return true;
+    }
+  return false;
+}
+
 juce::StringArray gpListDuplexDevices() {
   juce::StringArray out;
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
     return out;
+
+  // When jackd owns the interface, the only valid choice is the JACK device.
+  // Listing the raw ALSA hw device here is a trap: selecting it yanks the
+  // card from jackd and drops the audio.
+  if (gpJackAvailable()) {
+    for (auto *type : holder->deviceManager.getAvailableDeviceTypes())
+      if (type->getTypeName() == "JACK")
+        for (const auto &n : type->getDeviceNames(false))
+          out.addIfNotAlreadyThere(n);
+    return out;
+  }
+
   static const char *reject[] = {
       "pulse", "jack",       "converter", "plugin",     "default",
       "dmix",  "upmix",      "downmix",   "surround",   "hdmi",
@@ -847,6 +875,7 @@ AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
 void AudioPanel::rebuildDeviceButtons() {
 #if JucePlugin_Build_Standalone
   mDeviceButtons.clear();
+  const bool jack = gpJackAvailable();
   for (const auto &name : gpListDuplexDevices()) {
     // Show the friendly card name (before the first ';'/','), not the raw
     // ALSA hint — but key actions off the full name.
@@ -855,6 +884,8 @@ void AudioPanel::rebuildDeviceButtons() {
                              .trim();
     if (label.isEmpty())
       label = name;
+    if (jack) // the JACK graph device ("system") — name it for what it is
+      label = juce::String::fromUTF8("JACK \xe2\x80\x94 ") + mConfig.audioDeviceMatch;
     auto *b = new juce::TextButton(label);
     styleChoice(*b);
     b->onClick = [this, name] {
@@ -875,6 +906,16 @@ void AudioPanel::reopen() {
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
     return;
+
+  // Under JACK, jackd owns the device: (re)connect through the JACK path and
+  // never touch raw ALSA (which would steal the card and drop the audio).
+  if (gpJackAvailable()) {
+    const int liveIn = gpTryOpenJack();
+    gpTrace("panel reopen via JACK -> liveIn=" + juce::String(liveIn));
+    timerCallback();
+    return;
+  }
+
   auto *dev = holder->deviceManager.getCurrentAudioDevice();
   juce::String name = mSelectedName.isNotEmpty()
                           ? mSelectedName
@@ -913,16 +954,28 @@ void AudioPanel::timerCallback() {
   mStatus.setColour(juce::Label::textColourId,
                     in > 0 ? juce::Colour(0xff5abf6e) : colours::warn);
 
-  for (auto &b : mBufButtons)
-    b.setToggleState(b.getButtonText().getIntValue() == buf,
+  // Buffer and input-channel routing are owned by jackd when on JACK, so
+  // grey those controls out and say so rather than letting them break audio.
+  const bool jack = gpJackAvailable();
+  mBufHeader.setText(jack ? juce::String("BUFFER / RATE  \xc2\xb7  managed by JACK")
+                          : juce::String::fromUTF8(
+                                "BUFFER  (LOWER = LESS LATENCY)  \xc2\xb7  48 kHz"),
                      juce::dontSendNotification);
+  for (auto &b : mBufButtons) {
+    b.setEnabled(!jack);
+    b.setToggleState(!jack && b.getButtonText().getIntValue() == buf,
+                     juce::dontSendNotification);
+  }
+  for (auto &b : mInputButtons)
+    b.setEnabled(!jack);
   // Reflect the user's chosen input routing, not the device's raw active
   // channel mask (JUCE may open both capture channels regardless).
-  mInputButtons[0].setToggleState(mInputMask == 1, juce::dontSendNotification);
-  mInputButtons[1].setToggleState(mInputMask == 2, juce::dontSendNotification);
-  mInputButtons[2].setToggleState(mInputMask == 3, juce::dontSendNotification);
+  mInputButtons[0].setToggleState(!jack && mInputMask == 1, juce::dontSendNotification);
+  mInputButtons[1].setToggleState(!jack && mInputMask == 2, juce::dontSendNotification);
+  mInputButtons[2].setToggleState(!jack && mInputMask == 3, juce::dontSendNotification);
   for (auto *b : mDeviceButtons)
-    b->setToggleState(dev->getName().containsIgnoreCase(b->getButtonText()),
+    b->setToggleState(jack ? in > 0 // the single JACK device, lit when live
+                           : dev->getName().containsIgnoreCase(b->getButtonText()),
                       juce::dontSendNotification);
 #endif
 }
