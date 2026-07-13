@@ -221,6 +221,24 @@ private:
   bool mUserSetAudio = false; // user picked a device in the AUDIO panel
   int mConfigureAttempts = 0;
 
+  // Field-debug dump: `touch /tmp/gatewaypi-dump-request` over ssh records
+  // ~8 s of the app's raw input and final output to /tmp/gp-{in,out}.f32
+  // for offline analysis.  Zero cost when idle.
+  class DebugDump : private juce::Timer {
+  public:
+    explicit DebugDump(NAMixAudioProcessor &p) : mProc(p) { startTimer(1000); }
+    ~DebugDump() override { stopTimer(); finish(); }
+    bool isActive() const { return mIn != nullptr; }
+
+  private:
+    void timerCallback() override;
+    void finish();
+    NAMixAudioProcessor &mProc;
+    FILE *mIn = nullptr, *mOut = nullptr;
+    int mTicksLeft = 0;
+  };
+  std::unique_ptr<DebugDump> mDump;
+
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(KioskShell)
 };
 

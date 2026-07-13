@@ -260,6 +260,7 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
   setSize(area.getWidth(), area.getHeight());
 
   mMidi = std::make_unique<MidiEngine>(mPresets, mConfig);
+  mDump = std::make_unique<DebugDump>(proc);
 
   // Restore the last-used preset once the message loop is running.
   juce::MessageManager::callAsync(
@@ -282,9 +283,10 @@ void KioskShell::refresh() {
   mBar.refresh();
 
   // Mute doubles as silent tuning: the tap feeds the detector only while
-  // the overlay is up.
+  // the overlay is up.  (Don't fight the debug dump, which borrows the tap.)
   const bool tuning = mPresets->getMute();
-  mProcessor.gpSetTunerTap(tuning);
+  if (mDump == nullptr || !mDump->isActive())
+    mProcessor.gpSetTunerTap(tuning);
   if (tuning)
     hideOverlaysExcept(&mTuner); // tuner takes over from any open panel
   mTuner.setVisible(tuning);
@@ -596,6 +598,62 @@ void KioskShell::hideOverlaysExcept(juce::Component *keep) {
   // The tuner is driven by the mute flag; clear it when leaving the tuner.
   if (keep != &mTuner && mPresets->getMute())
     mProcessor.gpSetMute(false);
+}
+
+// ---------------------------------------------------------------------------
+// DebugDump — ssh-triggered raw signal capture for field analysis
+// ---------------------------------------------------------------------------
+
+void KioskShell::DebugDump::timerCallback() {
+  const juce::File req("/tmp/gatewaypi-dump-request");
+  if (mIn == nullptr) {
+    if (!req.existsAsFile())
+      return;
+    req.deleteFile();
+    mIn = std::fopen("/tmp/gp-in.f32", "wb");
+    mOut = std::fopen("/tmp/gp-out.f32", "wb");
+    mProc.gpSetTunerTap(true);
+    mProc.gpSetOutTap(true);
+    mProc.gpSetInjectSine(true); // deterministic input — no playing needed
+    gpTrace("dump: preparedBlock=" + juce::String(mProc.gpPreparedBlock()) +
+            " maxSeenBlock=" + juce::String(mProc.gpMaxSeenBlock()));
+    mTicksLeft = 8 * 50; // ~8 s at 50 Hz
+    stopTimer();
+    startTimerHz(50);
+    gpTrace("debug dump started");
+    return;
+  }
+
+  float buf[4096];
+  for (;;) {
+    const int n = mProc.gpReadTunerSamples(buf, 4096);
+    if (n <= 0)
+      break;
+    std::fwrite(buf, sizeof(float), (size_t)n, mIn);
+  }
+  for (;;) {
+    const int n = mProc.gpReadOutSamples(buf, 4096);
+    if (n <= 0)
+      break;
+    std::fwrite(buf, sizeof(float), (size_t)n, mOut);
+  }
+  if (--mTicksLeft <= 0)
+    finish();
+}
+
+void KioskShell::DebugDump::finish() {
+  if (mIn == nullptr)
+    return;
+  mProc.gpSetTunerTap(false);
+  mProc.gpSetOutTap(false);
+  mProc.gpSetInjectSine(false);
+  std::fclose(mIn);
+  std::fclose(mOut);
+  mIn = mOut = nullptr;
+  juce::File("/tmp/gatewaypi-dump-done").create();
+  stopTimer();
+  startTimer(1000);
+  gpTrace("debug dump finished");
 }
 
 // ---------------------------------------------------------------------------
