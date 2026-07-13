@@ -102,7 +102,7 @@ diff --git a/JUCE b/JUCE
 -Subproject commit 3ba67d4585e9d1fbcdb26a877c7978608b1f802e
 +Subproject commit 3ba67d4585e9d1fbcdb26a877c7978608b1f802e-dirty
 diff --git a/src/PluginEditor.cpp b/src/PluginEditor.cpp
-index ac3d411..61d3656 100644
+index ac3d411..2c122e7 100644
 --- a/src/PluginEditor.cpp
 +++ b/src/PluginEditor.cpp
 @@ -147,6 +147,7 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
@@ -121,7 +121,19 @@ index ac3d411..61d3656 100644
  
    // --- Knobs (labels use Roboto-Regular 17px = DEFAULT_TEXT_SIZE+3) ---
    setupKnob(mInputGainSlider, mInputGainLabel, "Input");
-@@ -323,7 +325,16 @@ void NAMixAudioProcessorEditor::paint(juce::Graphics &g) {
+@@ -210,7 +212,11 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
+     mSlimOverlay.setVisible(true);
+     mSlimOverlay.toFront(false);
+   };
++#if !GATEWAYPI
++  // The Slim control trades model accuracy for less CPU — pointless on a
++  // Pi 5 (plenty of headroom), so it's hidden in the appliance to declutter.
+   addAndMakeVisible(mSlimButton);
++#endif
+ 
+   // --- Slim overlay (dark backdrop + centred knob, initially hidden) ---
+   // Covers the full editor. Added last so it renders on top of everything.
+@@ -323,7 +329,16 @@ void NAMixAudioProcessorEditor::paint(juce::Graphics &g) {
    // Title — Michroma-Regular 30px, white, centred in contentArea.GetFromTop(50)
    g.setColour(juce::Colour(0xfff2f2f2));
    g.setFont(mMichromaFont.withHeight(30.0f));
@@ -139,7 +151,7 @@ index ac3d411..61d3656 100644
               juce::Justification::centred);
  
    // Gear icon — drawn in the settingsButtonArea corner (centred in 22×22)
-@@ -453,9 +464,15 @@ void NAMixAudioProcessorEditor::setupKnob(juce::Slider &slider, juce::Label &lab
+@@ -453,9 +468,15 @@ void NAMixAudioProcessorEditor::setupKnob(juce::Slider &slider, juce::Label &lab
  }
  
  void NAMixAudioProcessorEditor::chooseModelFile() {
@@ -157,7 +169,7 @@ index ac3d411..61d3656 100644
  
    mFileChooser->launchAsync(
        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-@@ -472,9 +489,14 @@ void NAMixAudioProcessorEditor::chooseModelFile() {
+@@ -472,9 +493,14 @@ void NAMixAudioProcessorEditor::chooseModelFile() {
  }
  
  void NAMixAudioProcessorEditor::chooseIRFile() {

@@ -11,7 +11,7 @@ import email.policy
 import html
 import json
 import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 DATA = os.environ.get("GATEWAYPI_DATA", "/var/lib/gatewaypi")
 
@@ -117,8 +117,14 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         ctype = self.headers.get("Content-Type", "")
-        raw = (f"Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n".encode()
-               + self.rfile.read(length))
+        # Read the whole body, but tolerate a client that stalls: the socket
+        # timeout turns a half-finished upload into an error instead of a hang.
+        try:
+            body = self.rfile.read(length)
+        except (TimeoutError, OSError):
+            self.close_connection = True
+            return
+        raw = f"Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
         message = email.parser.BytesParser(policy=email.policy.default).parsebytes(raw)
 
         saved, skipped = [], []
@@ -154,6 +160,10 @@ class Handler(BaseHTTPRequestHandler):
         msg = f'<div class="msg">{" &middot; ".join(parts) or "No files received"}</div>'
         self._page(msg)
 
+    # Per-connection socket timeout so a stalled client can't wedge its
+    # worker thread forever.
+    timeout = 30
+
     def log_message(self, fmt, *args):
         pass  # journald noise reduction
 
@@ -161,7 +171,11 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(IRS, exist_ok=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    # Threaded: one slow/stalled request can never block the whole server
+    # (the single-threaded version could get wedged by a half-open upload).
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    server.daemon_threads = True
+    server.serve_forever()
 
 
 if __name__ == "__main__":
