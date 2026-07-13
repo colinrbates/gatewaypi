@@ -1,0 +1,3 @@
+# GatewayPi: allow the kiosk user to power off from the on-screen OFF button.
+# Installed to /etc/sudoers.d/gatewaypi (0440).
+@USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot

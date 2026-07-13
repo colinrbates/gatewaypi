@@ -1,0 +1,14 @@
+[Unit]
+Description=GatewayPi web upload page (push .nam models and IRs from a phone)
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+Environment=GATEWAYPI_DATA=/var/lib/gatewaypi
+ExecStart=/usr/bin/python3 /opt/gatewaypi/bin/upload_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

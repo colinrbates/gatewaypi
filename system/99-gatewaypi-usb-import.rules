@@ -1,0 +1,3 @@
+# GatewayPi: when a USB stick partition appears, run the import service to
+# copy .nam models and IR .wav files into the library.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gatewaypi-usb-import@%k.service"

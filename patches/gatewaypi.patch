@@ -1,0 +1,159 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d88f9d7..44c83f3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -122,16 +122,20 @@ target_include_directories(NAMixLinux PRIVATE
+ # ---------------------------------------------------------------------------
+ # Link libraries
+ # ---------------------------------------------------------------------------
++# --whole-archive (-force_load on Apple ld) ensures every .o in NamDsp is
++# linked into the plugin, so that static-initialiser registrations (WaveNet,
++# LSTM, etc.) always execute at load time regardless of LTO / --as-needed.
++if(APPLE)
++    target_link_libraries(NAMixLinux PRIVATE NamDsp "-Wl,-force_load,$<TARGET_FILE:NamDsp>")
++else()
++    target_link_libraries(NAMixLinux PRIVATE -Wl,--whole-archive NamDsp -Wl,--no-whole-archive stdc++fs)
++endif()
++
+ target_link_libraries(NAMixLinux
+     PRIVATE
+-        # --whole-archive ensures every .o in NamDsp is linked into the VST3
+-        # .so, so that static-initialiser registrations (WaveNet, LSTM, etc.)
+-        # always execute at plugin load time regardless of LTO / --as-needed.
+-        -Wl,--whole-archive NamDsp -Wl,--no-whole-archive
+         NAMixBinaryData
+         juce::juce_audio_utils
+         juce::juce_opengl
+-        stdc++fs
+     PUBLIC
+         juce::juce_recommended_config_flags
+         juce::juce_recommended_lto_flags
+@@ -147,3 +151,20 @@ target_compile_options(NAMixLinux PRIVATE
+     -Wno-unused-parameter
+     $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>
+ )
++
++# ---------------------------------------------------------------------------
++# GatewayPi appliance layer (kiosk shell, preset bank, MIDI foot control).
++# Enable with -DGATEWAYPI=ON; requires src/gatewaypi/ to be present (copied
++# in by the GatewayPi installer).
++# ---------------------------------------------------------------------------
++option(GATEWAYPI "Build the GatewayPi kiosk appliance layer" OFF)
++if(GATEWAYPI)
++    target_sources(NAMixLinux PRIVATE
++        src/gatewaypi/PresetManager.cpp
++        src/gatewaypi/KioskShell.cpp
++    )
++    target_compile_definitions(NAMixLinux PUBLIC
++        GATEWAYPI=1
++        JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE=1
++    )
++endif()
+diff --git a/src/PluginEditor.cpp b/src/PluginEditor.cpp
+index ac3d411..353d51c 100644
+--- a/src/PluginEditor.cpp
++++ b/src/PluginEditor.cpp
+@@ -147,6 +147,7 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
+   // In standalone mode: enable native OS title bar and attach a File/Help
+   // menu bar just below it (DocumentWindow::setMenuBar positions it
+   // automatically between the title bar and content).
++#if !GATEWAYPI // the kiosk shell has no use for a title bar or menu
+   juce::MessageManager::callAsync([this] {
+     if (auto *dw = findParentComponentOfClass<juce::DocumentWindow>()) {
+       dw->setUsingNativeTitleBar(true);
+@@ -154,6 +155,7 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
+       dw->setMenuBar(mMenuBarModel.get());
+     }
+   });
++#endif
+ 
+   // --- Knobs (labels use Roboto-Regular 17px = DEFAULT_TEXT_SIZE+3) ---
+   setupKnob(mInputGainSlider, mInputGainLabel, "Input");
+diff --git a/src/PluginProcessor.cpp b/src/PluginProcessor.cpp
+index 8a795f9..99227e2 100644
+--- a/src/PluginProcessor.cpp
++++ b/src/PluginProcessor.cpp
+@@ -13,6 +13,10 @@
+ #include "PluginProcessor.h"
+ #include "PluginEditor.h"
+ 
++#if GATEWAYPI
++#include "gatewaypi/KioskShell.h"
++#endif
++
+ #include "NAM/get_dsp.h"
+ 
+ // Compatibility shims required by the iPlug2-derived LanczosResampler that
+@@ -248,6 +252,31 @@ void NAMixAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
+   if (mIRPending.exchange(false))
+     mIR = std::move(mPendingIR);
+ 
++  // GatewayPi: mute silences the output; bypass passes the dry input through.
++  // Both skip the DSP chain entirely — the model refills its short context in
++  // a few milliseconds when re-engaged.
++  if (mGpMute.load(std::memory_order_relaxed)) {
++    const float *in = buffer.getReadPointer(0);
++    float peak = 0.0f;
++    for (int i = 0; i < buffer.getNumSamples(); ++i)
++      peak = std::max(peak, std::abs(in[i]));
++    mInputLevel.store(peak, std::memory_order_relaxed);
++    mOutputLevel.store(0.0f, std::memory_order_relaxed);
++    buffer.clear();
++    return;
++  }
++  if (mGpBypass.load(std::memory_order_relaxed)) {
++    const float *in = buffer.getReadPointer(0);
++    float peak = 0.0f;
++    for (int i = 0; i < buffer.getNumSamples(); ++i)
++      peak = std::max(peak, std::abs(in[i]));
++    mInputLevel.store(peak, std::memory_order_relaxed);
++    mOutputLevel.store(peak, std::memory_order_relaxed);
++    for (int ch = 1; ch < buffer.getNumChannels(); ++ch)
++      buffer.copyFrom(ch, 0, buffer, 0, 0, buffer.getNumSamples());
++    return;
++  }
++
+   // Apply slim size update requested from the message thread.
+   if (mSlimDirty.exchange(false, std::memory_order_acq_rel)) {
+     const float v = apvts.getRawParameterValue("slim")->load();
+@@ -518,7 +547,11 @@ void NAMixAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
+ // Editor / plugin entry
+ // ---------------------------------------------------------------------------
+ juce::AudioProcessorEditor *NAMixAudioProcessor::createEditor() {
++#if GATEWAYPI
++  return new gatewaypi::KioskShell(*this);
++#else
+   return new NAMixAudioProcessorEditor(*this);
++#endif
+ }
+ 
+ juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {
+diff --git a/src/PluginProcessor.h b/src/PluginProcessor.h
+index 820444d..f1f0401 100644
+--- a/src/PluginProcessor.h
++++ b/src/PluginProcessor.h
+@@ -94,6 +94,14 @@ public:
+ 
+   static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+ 
++  // GatewayPi appliance hooks: hard bypass (dry signal straight through) and
++  // output mute (silent tuning).  Set from the message thread, read on the
++  // audio thread.
++  void gpSetBypass(bool b) { mGpBypass.store(b, std::memory_order_relaxed); }
++  void gpSetMute(bool m) { mGpMute.store(m, std::memory_order_relaxed); }
++  bool gpGetBypass() const { return mGpBypass.load(std::memory_order_relaxed); }
++  bool gpGetMute() const { return mGpMute.load(std::memory_order_relaxed); }
++
+ private:
+   void applyDsp(juce::AudioBuffer<float> &buffer);
+ 
+@@ -143,5 +151,9 @@ private:
+   juce::String mModelPath;
+   juce::String mIRPath;
+ 
++  // GatewayPi appliance flags (see gpSetBypass/gpSetMute above).
++  std::atomic<bool> mGpBypass{false};
++  std::atomic<bool> mGpMute{false};
++
+   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NAMixAudioProcessor)
+ };

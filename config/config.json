@@ -1,0 +1,11 @@
+{
+  "midiChannel": 0,
+  "ccBankDown": 80,
+  "ccBankUp": 81,
+  "ccBypass": 82,
+  "ccMute": 83,
+  "audioDeviceMatch": "iTwo",
+  "sampleRate": 48000,
+  "bufferSize": 128,
+  "bleMidiMac": ""
+}

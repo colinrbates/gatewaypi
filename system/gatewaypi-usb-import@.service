@@ -1,0 +1,6 @@
+[Unit]
+Description=GatewayPi USB import from /dev/%i
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gatewaypi/bin/usb-import.sh /dev/%i

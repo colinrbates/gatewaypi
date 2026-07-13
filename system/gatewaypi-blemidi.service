@@ -1,0 +1,13 @@
+[Unit]
+Description=GatewayPi BLE-MIDI auto-reconnect (M-Vave Chocolate)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/opt/gatewaypi/bin/ble-midi-connect.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
