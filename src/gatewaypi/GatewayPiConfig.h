@@ -32,8 +32,8 @@ struct Config {
   int ccBypass = 82;
   int ccMute = 83;
   juce::String audioDeviceMatch; // substring match for preferred ALSA device, e.g. "iTwo"
-  double sampleRate = 48000.0;
-  int bufferSize = 128;
+  double sampleRate = 48000.0; // NAM is optimised for 48 kHz; fixed.
+  int bufferSize = 64;
   double tunerReference = 440.0; // A4 reference pitch (Hz)
   bool autosavePresets = true;   // persist tweaks to the active slot
   juce::var midiMap;             // learned bindings: {action: {type, number}}
@@ -67,8 +67,8 @@ struct Config {
         if (obj->hasProperty("ccMute")) c.ccMute = (int)obj->getProperty("ccMute");
         if (obj->hasProperty("audioDeviceMatch"))
           c.audioDeviceMatch = obj->getProperty("audioDeviceMatch").toString();
-        if (obj->hasProperty("sampleRate")) c.sampleRate = (double)obj->getProperty("sampleRate");
         if (obj->hasProperty("bufferSize")) c.bufferSize = (int)obj->getProperty("bufferSize");
+        // sampleRate is intentionally fixed at 48 kHz (NAM's native rate).
         if (obj->hasProperty("tunerReference"))
           c.tunerReference = (double)obj->getProperty("tunerReference");
         if (obj->hasProperty("autosavePresets"))

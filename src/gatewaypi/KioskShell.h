@@ -158,17 +158,16 @@ private:
 
   const Config &mConfig;
   juce::Label mTitle, mStatus;
-  juce::Label mDeviceHeader, mInputHeader, mBufHeader, mRateHeader;
+  juce::Label mDeviceHeader, mInputHeader, mBufHeader;
   juce::OwnedArray<juce::TextButton> mDeviceButtons;
   std::array<juce::TextButton, 3> mInputButtons; // In 1 / In 2 / Both
   std::array<juce::TextButton, 3> mBufButtons;
-  std::array<juce::TextButton, 2> mRateButtons;
   juce::TextButton mTest{"TEST TONE"}, mClose{"CLOSE"};
 
   juce::String mSelectedName;
-  int mInputMask = 3;      // bits 0/1 -> device capture channels
-  int mBufSel = 128;
-  double mRateSel = 48000.0;
+  int mInputMask = 1;         // bits 0/1 -> device capture channels (In 1 default)
+  int mBufSel = 64;
+  static constexpr double kRate = 48000.0; // NAM native; fixed
 };
 
 // Static, self-contained audio-device configuration used by both the

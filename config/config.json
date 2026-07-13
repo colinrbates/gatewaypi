@@ -6,7 +6,7 @@
   "ccMute": 83,
   "audioDeviceMatch": "iTwo",
   "sampleRate": 48000,
-  "bufferSize": 128,
+  "bufferSize": 64,
   "bleMidiMac": "",
   "autosavePresets": true
 }

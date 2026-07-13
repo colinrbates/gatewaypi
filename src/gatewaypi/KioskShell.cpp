@@ -669,7 +669,6 @@ static void styleChoice(juce::TextButton &b) {
 
 AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
   mBufSel = mConfig.bufferSize;
-  mRateSel = mConfig.sampleRate;
 
   mTitle.setText("Audio Setup", juce::dontSendNotification);
   mTitle.setJustificationType(juce::Justification::centred);
@@ -684,9 +683,8 @@ AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
   struct HdrInit { juce::Label *l; const char *t; };
   for (auto h : {HdrInit{&mDeviceHeader, "INTERFACE"},
                  HdrInit{&mInputHeader, "GUITAR INPUT"},
-                 HdrInit{&mBufHeader, "BUFFER  (LOWER = LESS LATENCY)"},
-                 HdrInit{&mRateHeader, "SAMPLE RATE"}}) {
-    h.l->setText(h.t, juce::dontSendNotification);
+                 HdrInit{&mBufHeader, "BUFFER  (LOWER = LESS LATENCY)  \xc2\xb7  48 kHz"}}) {
+    h.l->setText(juce::String::fromUTF8(h.t), juce::dontSendNotification);
     h.l->setColour(juce::Label::textColourId, colours::active);
     h.l->setFont(juce::FontOptions(13.0f, juce::Font::bold));
     addAndMakeVisible(*h.l);
@@ -714,20 +712,6 @@ AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
     const int v = juce::String(bufLabels[i]).getIntValue();
     b.onClick = [this, v] {
       mBufSel = v;
-      reopen();
-    };
-    addAndMakeVisible(b);
-  }
-
-  const char *rateLabels[] = {"44.1k", "48k"};
-  const double rates[] = {44100.0, 48000.0};
-  for (size_t i = 0; i < mRateButtons.size(); ++i) {
-    auto &b = mRateButtons[i];
-    b.setButtonText(rateLabels[i]);
-    styleChoice(b);
-    const double r = rates[i];
-    b.onClick = [this, r] {
-      mRateSel = r;
       reopen();
     };
     addAndMakeVisible(b);
@@ -792,10 +776,10 @@ void AudioPanel::reopen() {
                           : (dev ? dev->getName() : mConfig.audioDeviceMatch);
   if (name.isEmpty())
     return;
-  const int liveIn = gpTryOpenDevice(name, mRateSel, mBufSel, mInputMask);
+  const int liveIn = gpTryOpenDevice(name, kRate, mBufSel, mInputMask);
   gpTrace("panel reopen \"" + name + "\" buf=" + juce::String(mBufSel) +
-          " rate=" + juce::String(mRateSel) + " inMask=" +
-          juce::String(mInputMask) + " -> liveIn=" + juce::String(liveIn));
+          " inMask=" + juce::String(mInputMask) + " -> liveIn=" +
+          juce::String(liveIn));
   timerCallback();
 #endif
 }
@@ -827,13 +811,11 @@ void AudioPanel::timerCallback() {
   for (auto &b : mBufButtons)
     b.setToggleState(b.getButtonText().getIntValue() == buf,
                      juce::dontSendNotification);
-  for (size_t i = 0; i < mRateButtons.size(); ++i)
-    mRateButtons[i].setToggleState((i == 0 ? 44100 : 48000) == (int)sr,
-                                   juce::dontSendNotification);
-  const int liveMask = (int)dev->getActiveInputChannels().toInteger();
-  mInputButtons[0].setToggleState(liveMask == 1, juce::dontSendNotification);
-  mInputButtons[1].setToggleState(liveMask == 2, juce::dontSendNotification);
-  mInputButtons[2].setToggleState(liveMask == 3, juce::dontSendNotification);
+  // Reflect the user's chosen input routing, not the device's raw active
+  // channel mask (JUCE may open both capture channels regardless).
+  mInputButtons[0].setToggleState(mInputMask == 1, juce::dontSendNotification);
+  mInputButtons[1].setToggleState(mInputMask == 2, juce::dontSendNotification);
+  mInputButtons[2].setToggleState(mInputMask == 3, juce::dontSendNotification);
   for (auto *b : mDeviceButtons)
     b->setToggleState(dev->getName().containsIgnoreCase(b->getButtonText()),
                       juce::dontSendNotification);
@@ -888,9 +870,6 @@ void AudioPanel::resized() {
 
   mBufHeader.setBounds(area.removeFromTop(line));
   rowOf({&mBufButtons[0], &mBufButtons[1], &mBufButtons[2]});
-
-  mRateHeader.setBounds(area.removeFromTop(line));
-  rowOf({&mRateButtons[0], &mRateButtons[1]});
 }
 
 // ---------------------------------------------------------------------------
