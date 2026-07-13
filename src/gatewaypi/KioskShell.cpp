@@ -1093,7 +1093,8 @@ KeyboardOverlay::KeyboardOverlay() {
       onMove(1);
   };
 
-  rebuildKeys();
+  setWantsKeyboardFocus(true); // accept USB-keyboard input too
+  buildKeys();
 }
 
 void KeyboardOverlay::setPrompt(const juce::String &prompt,
@@ -1102,8 +1103,13 @@ void KeyboardOverlay::setPrompt(const juce::String &prompt,
   mText = initialText;
   mShift = mText.isEmpty(); // capitalise the first letter of a fresh name
   mPromptLabel.setText(prompt, juce::dontSendNotification);
-  rebuildKeys();
+  relabelKeys();
   refreshDisplay();
+}
+
+void KeyboardOverlay::visibilityChanged() {
+  if (isShowing())
+    grabKeyboardFocus(); // so a USB keyboard types straight in
 }
 
 void KeyboardOverlay::refreshDisplay() {
@@ -1111,52 +1117,108 @@ void KeyboardOverlay::refreshDisplay() {
                      juce::dontSendNotification);
 }
 
-void KeyboardOverlay::addKey(const juce::String &cap,
-                             std::function<void()> action) {
-  auto *b = new juce::TextButton(cap);
-  b->setColour(juce::TextButton::buttonColourId, colours::idle);
-  b->setColour(juce::TextButton::textColourOffId, colours::text);
-  b->onClick = [this, action = std::move(action)] {
-    action();
-    refreshDisplay();
-  };
-  addAndMakeVisible(b);
-  mKeys.add(b);
+void KeyboardOverlay::appendChar(const juce::String &c) {
+  if (mText.length() < 24)
+    mText += c;
+  if (mShift) { // one-shot capitalisation, like a phone keyboard
+    mShift = false;
+    relabelKeys();
+  }
+  refreshDisplay();
 }
 
-void KeyboardOverlay::rebuildKeys() {
-  mKeys.clear();
+// Keys are created ONCE and kept; shift only relabels them. (Recreating the
+// key array from within a key's own onClick was a use-after-free — it deleted
+// the button mid-click, which crashed on Shift.)
+void KeyboardOverlay::buildKeys() {
+  auto style = [](juce::TextButton *b) {
+    b->setColour(juce::TextButton::buttonColourId, colours::idle);
+    b->setColour(juce::TextButton::textColourOffId, colours::text);
+  };
+
   const char *rows[] = {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
   for (const char *row : rows)
     for (const char *p = row; *p; ++p) {
-      juce::juce_wchar ch = (juce::juce_wchar)*p;
-      const bool letter = juce::CharacterFunctions::isLetter(ch);
-      juce::String cap =
-          letter && !mShift ? juce::String::charToString(ch).toLowerCase()
-                            : juce::String::charToString(ch);
-      addKey(cap, [this, cap] {
-        if (mText.length() < 24)
-          mText += cap;
-        if (mShift) { // one-shot capitalisation, like a phone keyboard
-          mShift = false;
-          rebuildKeys();
-          resized();
-        }
-      });
+      const juce::juce_wchar ch = (juce::juce_wchar)*p;
+      auto *b = new juce::TextButton(juce::String::charToString(ch));
+      style(b);
+      if (juce::CharacterFunctions::isLetter(ch)) {
+        mLetterKeys.add({b, ch});
+        const juce::juce_wchar up = ch;
+        b->onClick = [this, up] {
+          appendChar(mShift ? juce::String::charToString(up)
+                            : juce::String::charToString(up).toLowerCase());
+        };
+      } else {
+        const juce::String digit = juce::String::charToString(ch);
+        b->onClick = [this, digit] { appendChar(digit); };
+      }
+      addAndMakeVisible(b);
+      mKeys.add(b);
     }
-  addKey(mShift ? "shift*" : "SHIFT", [this] {
+
+  auto *shift = new juce::TextButton("SHIFT");
+  style(shift);
+  mShiftKey = shift;
+  shift->onClick = [this] {
     mShift = !mShift;
-    rebuildKeys();
-    resized();
-  });
-  addKey("SPACE", [this] {
-    if (mText.length() < 24)
-      mText += " ";
-  });
-  addKey(juce::String::fromUTF8("\xe2\x8c\xab"), [this] { // backspace
+    relabelKeys();
+  };
+  addAndMakeVisible(shift);
+  mKeys.add(shift);
+
+  auto *space = new juce::TextButton("SPACE");
+  style(space);
+  space->onClick = [this] { appendChar(" "); };
+  addAndMakeVisible(space);
+  mKeys.add(space);
+
+  auto *back = new juce::TextButton(juce::String::fromUTF8("\xe2\x8c\xab"));
+  style(back);
+  back->onClick = [this] {
     mText = mText.dropLastCharacters(1);
-  });
-  resized();
+    refreshDisplay();
+  };
+  addAndMakeVisible(back);
+  mKeys.add(back);
+
+  relabelKeys();
+}
+
+void KeyboardOverlay::relabelKeys() {
+  for (auto &lk : mLetterKeys)
+    lk.button->setButtonText(
+        mShift ? juce::String::charToString(lk.upper)
+               : juce::String::charToString(lk.upper).toLowerCase());
+  if (mShiftKey != nullptr)
+    mShiftKey->setColour(juce::TextButton::buttonColourId,
+                         mShift ? colours::active : colours::idle);
+}
+
+bool KeyboardOverlay::keyPressed(const juce::KeyPress &key) {
+  if (key == juce::KeyPress::returnKey) {
+    if (onAccept)
+      onAccept(mText.trim());
+    return true;
+  }
+  if (key == juce::KeyPress::escapeKey) {
+    if (onCancel)
+      onCancel();
+    return true;
+  }
+  if (key == juce::KeyPress::backspaceKey) {
+    mText = mText.dropLastCharacters(1);
+    refreshDisplay();
+    return true;
+  }
+  const juce::juce_wchar c = key.getTextCharacter();
+  if (c >= 32 && c != 127) { // printable — physical shift already applied
+    if (mText.length() < 24)
+      mText += juce::String::charToString(c);
+    refreshDisplay();
+    return true;
+  }
+  return false;
 }
 
 void KeyboardOverlay::paint(juce::Graphics &g) {

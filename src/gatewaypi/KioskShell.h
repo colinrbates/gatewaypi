@@ -96,15 +96,27 @@ public:
   std::function<void()> onCancel;
   std::function<void(int)> onMove; // reorder: -1 = move left, +1 = move right
 
+  // USB-keyboard support: type/backspace/enter/escape drive renaming too.
+  bool keyPressed(const juce::KeyPress &key) override;
+  void visibilityChanged() override;
+
 private:
-  void addKey(const juce::String &cap, std::function<void()> action);
-  void rebuildKeys();
+  void buildKeys();   // create the on-screen keys once
+  void relabelKeys(); // update letter case in place (never destroy mid-click)
   void refreshDisplay();
+  void appendChar(const juce::String &c);
+
+  struct LetterKey {
+    juce::TextButton *button;
+    juce::juce_wchar upper;
+  };
 
   juce::String mPrompt, mText;
   bool mShift = true; // start capitalised (amp names read nicer)
   juce::Label mPromptLabel, mTextLabel;
-  juce::OwnedArray<juce::TextButton> mKeys;      // rebuilt on shift toggle
+  juce::OwnedArray<juce::TextButton> mKeys; // built once, persistent
+  juce::Array<LetterKey> mLetterKeys;       // letter buttons + base char
+  juce::TextButton *mShiftKey = nullptr;
   juce::TextButton mMoveLeft{juce::String::fromUTF8("\xe2\x97\x80 MOVE")};
   juce::TextButton mMoveRight{juce::String::fromUTF8("MOVE \xe2\x96\xb6")};
   juce::TextButton mCancel{"CANCEL"}, mAccept{"SAVE"};

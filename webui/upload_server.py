@@ -102,7 +102,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # Serve the page at /, /index.html, and /upload (the latter is the
+        # POST target, but people bookmark it and GET it — be friendly).
+        if self.path.split("?")[0] in ("/", "/index.html", "/upload"):
             self._page()
         else:
             self.send_error(404)
