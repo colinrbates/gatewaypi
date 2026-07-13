@@ -39,6 +39,11 @@ PresetBar::PresetBar(PresetManager &presets) : mPresets(presets) {
     b.setColour(juce::TextButton::textColourOnId, colours::bg);
     b.setClickingTogglesState(false);
     b.onClick = [this, i] { mPresets.selectSlot(i); };
+    b.onLongPress = [this, i] {
+      mPresets.selectSlot(i);
+      if (onRenameSlot)
+        onRenameSlot(i);
+    };
     addAndMakeVisible(b);
   }
 
@@ -239,6 +244,7 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
   mBar.onOpenAudioSettings = [this] { openAudioSettings(); };
   mBar.onOpenMidiLearn = [this] { openMidiLearn(); };
   mBar.onShutdown = [this] { requestShutdown(); };
+  mBar.onRenameSlot = [this](int slot) { openRename(slot); };
   addAndMakeVisible(mBar);
   addChildComponent(mTuner);
 
@@ -297,6 +303,8 @@ void KioskShell::recreateInnerEditor() {
     mAudioPanel->toFront(false);
   if (mConfirm != nullptr)
     mConfirm->toFront(false);
+  if (mKeyboard != nullptr)
+    mKeyboard->toFront(false);
   resized();
 }
 
@@ -313,6 +321,8 @@ void KioskShell::resized() {
     mAudioPanel->setBounds(area);
   if (mConfirm != nullptr)
     mConfirm->setBounds(area);
+  if (mKeyboard != nullptr)
+    mKeyboard->setBounds(area);
 
   if (mInner == nullptr)
     return;
@@ -349,6 +359,11 @@ juce::StringArray gpListDuplexDevices() {
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
     return out;
+  static const char *reject[] = {
+      "pulse", "jack",       "converter", "plugin",     "default",
+      "dmix",  "upmix",      "downmix",   "surround",   "hdmi",
+      "stream output", "open sound", "snooping", "iec958", "front output"};
+  juce::StringArray seenCards;
   for (auto *type : holder->deviceManager.getAvailableDeviceTypes()) {
     type->scanForDevices();
     const auto ins = type->getDeviceNames(true);
@@ -356,13 +371,23 @@ juce::StringArray gpListDuplexDevices() {
     for (const auto &in : ins) {
       if (!outs.contains(in))
         continue;
-      if (in.containsIgnoreCase("pulse") || in.containsIgnoreCase("jack") ||
-          in.containsIgnoreCase("converter") || in.containsIgnoreCase("plugin") ||
-          in.containsIgnoreCase("default") || in.containsIgnoreCase("dmix") ||
-          in.containsIgnoreCase("upmix") || in.containsIgnoreCase("downmix") ||
-          in.containsIgnoreCase("surround"))
+      bool bad = false;
+      for (auto *r : reject)
+        if (in.containsIgnoreCase(r)) {
+          bad = true;
+          break;
+        }
+      if (bad)
         continue;
-      out.addIfNotAlreadyThere(in);
+      // One entry per physical card (dedupe on the card name before the
+      // ';'/',' PCM descriptor).
+      const juce::String card = in.upToFirstOccurrenceOf(";", false, false)
+                                    .upToLastOccurrenceOf(",", false, false)
+                                    .trim();
+      if (seenCards.contains(card))
+        continue;
+      seenCards.add(card);
+      out.add(in);
     }
   }
   return out;
@@ -374,12 +399,14 @@ juce::StringArray gpListDuplexDevices() {
 // reading back the opened device — the failure mode that dogged the iTwo was
 // JUCE opening output-only with a mismatched input name.
 int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
-                    int bufferSize) {
+                    int bufferSize, int inputChannelMask) {
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr || deviceNameContains.isEmpty())
     return 0;
   holder->shouldMuteInput.setValue(false); // this is a guitar amp
   auto &dm = holder->deviceManager;
+  if (inputChannelMask == 0)
+    inputChannelMask = 3;
 
   for (auto *type : dm.getAvailableDeviceTypes()) {
     type->scanForDevices();
@@ -404,7 +431,10 @@ int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
       setup.bufferSize = bufferSize;
       setup.useDefaultInputChannels = false;
       setup.inputChannels.clear();
-      setup.inputChannels.setRange(0, 2, true);
+      if (inputChannelMask & 1)
+        setup.inputChannels.setBit(0);
+      if (inputChannelMask & 2)
+        setup.inputChannels.setBit(1);
       setup.useDefaultOutputChannels = false;
       setup.outputChannels.clear();
       setup.outputChannels.setRange(0, 2, true);
@@ -498,6 +528,25 @@ void KioskShell::openAudioSettings() {
 #endif
 }
 
+void KioskShell::openRename(int slot) {
+  if (mKeyboard == nullptr) {
+    mKeyboard = std::make_unique<KeyboardOverlay>();
+    mKeyboard->onCancel = [this] { mKeyboard->setVisible(false); };
+    mKeyboard->onAccept = [this](juce::String name) {
+      mPresets->setCurrentSlotName(name);
+      mKeyboard->setVisible(false);
+    };
+    addChildComponent(*mKeyboard);
+  }
+  const juce::String cur =
+      mPresets->isSlotOccupied(slot) ? mPresets->getSlotName(slot) : juce::String();
+  mKeyboard->setPrompt("Name preset " + juce::String(slot + 1),
+                       cur == "-" ? juce::String() : cur);
+  mKeyboard->setVisible(true);
+  mKeyboard->toFront(false);
+  resized();
+}
+
 void KioskShell::requestShutdown() {
   if (mConfirm == nullptr) {
     mConfirm = std::make_unique<ConfirmOverlay>("Power off the amp?", "POWER OFF");
@@ -558,49 +607,90 @@ void ConfirmOverlay::resized() {
 // AudioPanel
 // ---------------------------------------------------------------------------
 
+static void styleChoice(juce::TextButton &b) {
+  b.setColour(juce::TextButton::buttonColourId, colours::idle);
+  b.setColour(juce::TextButton::buttonOnColourId, colours::active);
+  b.setColour(juce::TextButton::textColourOffId, colours::text);
+  b.setColour(juce::TextButton::textColourOnId, colours::bg);
+  b.setClickingTogglesState(false);
+}
+
 AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
-  mTitle.setText("Audio", juce::dontSendNotification);
+  mBufSel = mConfig.bufferSize;
+  mRateSel = mConfig.sampleRate;
+
+  mTitle.setText("Audio Setup", juce::dontSendNotification);
   mTitle.setJustificationType(juce::Justification::centred);
   mTitle.setColour(juce::Label::textColourId, colours::active);
+  mTitle.setFont(juce::FontOptions(22.0f, juce::Font::bold));
   addAndMakeVisible(mTitle);
 
   mStatus.setJustificationType(juce::Justification::centred);
   mStatus.setColour(juce::Label::textColourId, colours::text);
   addAndMakeVisible(mStatus);
 
-  for (auto *hdr : {&mDeviceHeader, &mBufHeader, &mRateHeader})
-    hdr->setColour(juce::Label::textColourId, colours::text);
-  mDeviceHeader.setText("Interface", juce::dontSendNotification);
-  mBufHeader.setText("Buffer (latency)", juce::dontSendNotification);
-  mRateHeader.setText("Sample rate", juce::dontSendNotification);
-  addAndMakeVisible(mDeviceHeader);
-  addAndMakeVisible(mBufHeader);
-  addAndMakeVisible(mRateHeader);
+  struct HdrInit { juce::Label *l; const char *t; };
+  for (auto h : {HdrInit{&mDeviceHeader, "INTERFACE"},
+                 HdrInit{&mInputHeader, "GUITAR INPUT"},
+                 HdrInit{&mBufHeader, "BUFFER  (LOWER = LESS LATENCY)"},
+                 HdrInit{&mRateHeader, "SAMPLE RATE"}}) {
+    h.l->setText(h.t, juce::dontSendNotification);
+    h.l->setColour(juce::Label::textColourId, colours::active);
+    h.l->setFont(juce::FontOptions(13.0f, juce::Font::bold));
+    addAndMakeVisible(*h.l);
+  }
+
+  const char *inLabels[] = {"IN 1", "IN 2", "BOTH"};
+  const int inMasks[] = {1, 2, 3};
+  for (size_t i = 0; i < mInputButtons.size(); ++i) {
+    auto &b = mInputButtons[i];
+    b.setButtonText(inLabels[i]);
+    styleChoice(b);
+    const int mask = inMasks[i];
+    b.onClick = [this, mask] {
+      mInputMask = mask;
+      reopen();
+    };
+    addAndMakeVisible(b);
+  }
 
   const char *bufLabels[] = {"64", "128", "256"};
   for (size_t i = 0; i < mBufButtons.size(); ++i) {
     auto &b = mBufButtons[i];
     b.setButtonText(bufLabels[i]);
-    b.setColour(juce::TextButton::buttonColourId, colours::idle);
-    b.setColour(juce::TextButton::buttonOnColourId, colours::active);
-    b.setColour(juce::TextButton::textColourOffId, colours::text);
-    b.setColour(juce::TextButton::textColourOnId, colours::bg);
-    b.setClickingTogglesState(false);
-    b.onClick = [this] { applyRateBuffer(); };
+    styleChoice(b);
+    const int v = juce::String(bufLabels[i]).getIntValue();
+    b.onClick = [this, v] {
+      mBufSel = v;
+      reopen();
+    };
     addAndMakeVisible(b);
   }
-  const char *rateLabels[] = {"44100", "48000"};
+
+  const char *rateLabels[] = {"44.1k", "48k"};
+  const double rates[] = {44100.0, 48000.0};
   for (size_t i = 0; i < mRateButtons.size(); ++i) {
     auto &b = mRateButtons[i];
     b.setButtonText(rateLabels[i]);
-    b.setColour(juce::TextButton::buttonColourId, colours::idle);
-    b.setColour(juce::TextButton::buttonOnColourId, colours::active);
-    b.setColour(juce::TextButton::textColourOffId, colours::text);
-    b.setColour(juce::TextButton::textColourOnId, colours::bg);
-    b.setClickingTogglesState(false);
-    b.onClick = [this] { applyRateBuffer(); };
+    styleChoice(b);
+    const double r = rates[i];
+    b.onClick = [this, r] {
+      mRateSel = r;
+      reopen();
+    };
     addAndMakeVisible(b);
   }
+
+  mTest.setColour(juce::TextButton::buttonColourId, colours::idle);
+  mTest.setColour(juce::TextButton::textColourOffId, colours::text);
+  mTest.onClick = [] {
+#if JucePlugin_Build_Standalone
+    if (auto *h = juce::StandalonePluginHolder::getInstance())
+      h->deviceManager.playTestSound();
+#endif
+  };
+  addAndMakeVisible(mTest);
+
   mClose.setColour(juce::TextButton::buttonColourId, colours::active);
   mClose.setColour(juce::TextButton::textColourOffId, colours::bg);
   mClose.onClick = [this] {
@@ -617,12 +707,19 @@ void AudioPanel::rebuildDeviceButtons() {
 #if JucePlugin_Build_Standalone
   mDeviceButtons.clear();
   for (const auto &name : gpListDuplexDevices()) {
-    auto *b = new juce::TextButton(name);
-    b->setColour(juce::TextButton::buttonColourId, colours::idle);
-    b->setColour(juce::TextButton::buttonOnColourId, colours::active);
-    b->setColour(juce::TextButton::textColourOffId, colours::text);
-    b->setColour(juce::TextButton::textColourOnId, colours::bg);
-    b->onClick = [this, name] { openDevice(name); };
+    // Show the friendly card name (before the first ';'/','), not the raw
+    // ALSA hint — but key actions off the full name.
+    juce::String label = name.upToFirstOccurrenceOf(";", false, false)
+                             .upToLastOccurrenceOf(",", false, false)
+                             .trim();
+    if (label.isEmpty())
+      label = name;
+    auto *b = new juce::TextButton(label);
+    styleChoice(*b);
+    b->onClick = [this, name] {
+      mSelectedName = name;
+      reopen();
+    };
     addAndMakeVisible(b);
     mDeviceButtons.add(b);
   }
@@ -632,37 +729,21 @@ void AudioPanel::rebuildDeviceButtons() {
 
 void AudioPanel::refreshDevices() { rebuildDeviceButtons(); }
 
-void AudioPanel::openDevice(const juce::String &name) {
+void AudioPanel::reopen() {
 #if JucePlugin_Build_Standalone
-  mSelectedName = name;
-  const int buf = mConfig.bufferSize;
-  const int liveIn = gpTryOpenDevice(name, mConfig.sampleRate, buf);
-  gpTrace("panel openDevice \"" + name + "\" -> liveIn=" + juce::String(liveIn));
-  timerCallback();
-#endif
-}
-
-void AudioPanel::applyRateBuffer() {
-#if JucePlugin_Build_Standalone
-  // Read the chosen toggles and re-open the current device with them.
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
     return;
   auto *dev = holder->deviceManager.getCurrentAudioDevice();
   juce::String name = mSelectedName.isNotEmpty()
                           ? mSelectedName
-                          : (dev ? dev->getName() : juce::String());
+                          : (dev ? dev->getName() : mConfig.audioDeviceMatch);
   if (name.isEmpty())
     return;
-  int buf = 128;
-  for (auto &b : mBufButtons)
-    if (b.getToggleState())
-      buf = b.getButtonText().getIntValue();
-  double rate = 48000.0;
-  for (auto &b : mRateButtons)
-    if (b.getToggleState())
-      rate = b.getButtonText().getDoubleValue();
-  gpTryOpenDevice(name, rate, buf);
+  const int liveIn = gpTryOpenDevice(name, mRateSel, mBufSel, mInputMask);
+  gpTrace("panel reopen \"" + name + "\" buf=" + juce::String(mBufSel) +
+          " rate=" + juce::String(mRateSel) + " inMask=" +
+          juce::String(mInputMask) + " -> liveIn=" + juce::String(liveIn));
   timerCallback();
 #endif
 }
@@ -672,7 +753,8 @@ void AudioPanel::timerCallback() {
   auto *holder = juce::StandalonePluginHolder::getInstance();
   auto *dev = holder ? holder->deviceManager.getCurrentAudioDevice() : nullptr;
   if (dev == nullptr) {
-    mStatus.setText("No device open", juce::dontSendNotification);
+    mStatus.setText("No device open — pick your interface below",
+                    juce::dontSendNotification);
     return;
   }
   const int in = dev->getActiveInputChannels().countNumberOfSetBits();
@@ -680,65 +762,218 @@ void AudioPanel::timerCallback() {
   const int buf = dev->getCurrentBufferSizeSamples();
   const double sr = dev->getCurrentSampleRate();
   const float latency = sr > 0 ? (float)buf / (float)sr * 1000.0f : 0.0f;
-  mStatus.setText(dev->getName() + juce::String::fromUTF8("  \xe2\x80\x94  in ") +
-                      juce::String(in) + " / out " + juce::String(out) + "  " +
-                      juce::String(sr / 1000.0, 1) + "kHz  " + juce::String(buf) +
-                      " smp (" + juce::String(latency, 1) + " ms" +
-                      (in > 0 ? ")" : ") — NO INPUT"),
+  mStatus.setText(juce::String(in > 0 ? juce::String::fromUTF8("\xe2\x97\x8f live")
+                                       : juce::String("NO INPUT")) +
+                      "   in " + juce::String(in) + " / out " + juce::String(out) +
+                      "   " + juce::String(sr / 1000.0, 1) + " kHz   " +
+                      juce::String(buf) + " smp   " + juce::String(latency, 1) +
+                      " ms round trip",
                   juce::dontSendNotification);
+  mStatus.setColour(juce::Label::textColourId,
+                    in > 0 ? juce::Colour(0xff5abf6e) : colours::warn);
 
   for (auto &b : mBufButtons)
     b.setToggleState(b.getButtonText().getIntValue() == buf,
                      juce::dontSendNotification);
-  for (auto &b : mRateButtons)
-    b.setToggleState((double)b.getButtonText().getIntValue() == sr,
-                     juce::dontSendNotification);
+  for (size_t i = 0; i < mRateButtons.size(); ++i)
+    mRateButtons[i].setToggleState((i == 0 ? 44100 : 48000) == (int)sr,
+                                   juce::dontSendNotification);
+  const int liveMask = (int)dev->getActiveInputChannels().toInteger();
+  mInputButtons[0].setToggleState(liveMask == 1, juce::dontSendNotification);
+  mInputButtons[1].setToggleState(liveMask == 2, juce::dontSendNotification);
+  mInputButtons[2].setToggleState(liveMask == 3, juce::dontSendNotification);
   for (auto *b : mDeviceButtons)
-    b->setToggleState(dev->getName().containsIgnoreCase(b->getButtonText()) ||
-                          b->getButtonText().containsIgnoreCase(dev->getName()),
+    b->setToggleState(dev->getName().containsIgnoreCase(b->getButtonText()),
                       juce::dontSendNotification);
 #endif
 }
 
-void AudioPanel::paint(juce::Graphics &g) { g.fillAll(juce::Colour(0xf2141517)); }
+void AudioPanel::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colour(0xf5141517));
+  // Framed card for a less "raw" feel.
+  g.setColour(juce::Colour(0x22ffffff));
+  g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(6.0f), 10.0f, 1.0f);
+}
 
 void AudioPanel::resized() {
-  auto area = getLocalBounds().reduced(juce::jmax(12, getWidth() / 20));
-  const int line = juce::jmax(28, getHeight() / 16);
+  auto area = getLocalBounds().reduced(juce::jmax(14, getWidth() / 18));
+  const int line = juce::jlimit(26, 40, getHeight() / 18);
+  const int rowH = juce::jlimit(40, 60, getHeight() / 13);
   const int gap = 8;
-  mTitle.setBounds(area.removeFromTop(line));
+
+  mTitle.setBounds(area.removeFromTop(line + 6));
   mStatus.setBounds(area.removeFromTop(line));
   area.removeFromTop(gap);
 
-  mClose.setBounds(area.removeFromBottom(juce::jmax(48, line * 2)));
+  auto footer = area.removeFromBottom(juce::jmax(48, rowH));
+  {
+    const int w = (footer.getWidth() - gap) / 2;
+    mTest.setBounds(footer.removeFromLeft(w));
+    mClose.setBounds(footer.removeFromRight(w));
+  }
   area.removeFromBottom(gap);
+
+  auto rowOf = [&](std::initializer_list<juce::TextButton *> btns) {
+    auto row = area.removeFromTop(rowH);
+    const int n = (int)btns.size();
+    const int w = (row.getWidth() - gap * (n - 1)) / n;
+    for (auto *b : btns) {
+      b->setBounds(row.removeFromLeft(w));
+      row.removeFromLeft(gap);
+    }
+    area.removeFromTop(gap);
+  };
 
   mDeviceHeader.setBounds(area.removeFromTop(line));
   for (auto *b : mDeviceButtons) {
-    b->setBounds(area.removeFromTop(juce::jmax(40, line + 12)));
+    b->setBounds(area.removeFromTop(rowH));
     area.removeFromTop(4);
   }
   area.removeFromTop(gap);
 
+  mInputHeader.setBounds(area.removeFromTop(line));
+  rowOf({&mInputButtons[0], &mInputButtons[1], &mInputButtons[2]});
+
   mBufHeader.setBounds(area.removeFromTop(line));
-  {
-    auto row = area.removeFromTop(juce::jmax(44, line + 14));
-    const int w = (row.getWidth() - gap * 2) / 3;
-    for (auto &b : mBufButtons) {
-      b.setBounds(row.removeFromLeft(w));
-      row.removeFromLeft(gap);
-    }
-  }
-  area.removeFromTop(gap);
+  rowOf({&mBufButtons[0], &mBufButtons[1], &mBufButtons[2]});
 
   mRateHeader.setBounds(area.removeFromTop(line));
+  rowOf({&mRateButtons[0], &mRateButtons[1]});
+}
+
+// ---------------------------------------------------------------------------
+// KeyboardOverlay
+// ---------------------------------------------------------------------------
+
+KeyboardOverlay::KeyboardOverlay() {
+  mPromptLabel.setJustificationType(juce::Justification::centred);
+  mPromptLabel.setColour(juce::Label::textColourId, colours::active);
+  mPromptLabel.setFont(juce::FontOptions(18.0f, juce::Font::bold));
+  addAndMakeVisible(mPromptLabel);
+
+  mTextLabel.setJustificationType(juce::Justification::centred);
+  mTextLabel.setColour(juce::Label::textColourId, colours::text);
+  mTextLabel.setColour(juce::Label::backgroundColourId, juce::Colour(0xff26282c));
+  mTextLabel.setFont(juce::FontOptions(28.0f, juce::Font::bold));
+  addAndMakeVisible(mTextLabel);
+
+  mCancel.setColour(juce::TextButton::buttonColourId, colours::idle);
+  mCancel.setColour(juce::TextButton::textColourOffId, colours::text);
+  mCancel.onClick = [this] {
+    if (onCancel)
+      onCancel();
+  };
+  addAndMakeVisible(mCancel);
+
+  mAccept.setColour(juce::TextButton::buttonColourId, colours::active);
+  mAccept.setColour(juce::TextButton::textColourOffId, colours::bg);
+  mAccept.onClick = [this] {
+    if (onAccept)
+      onAccept(mText.trim());
+  };
+  addAndMakeVisible(mAccept);
+
+  rebuildKeys();
+}
+
+void KeyboardOverlay::setPrompt(const juce::String &prompt,
+                                const juce::String &initialText) {
+  mPrompt = prompt;
+  mText = initialText;
+  mShift = mText.isEmpty(); // capitalise the first letter of a fresh name
+  mPromptLabel.setText(prompt, juce::dontSendNotification);
+  rebuildKeys();
+  refreshDisplay();
+}
+
+void KeyboardOverlay::refreshDisplay() {
+  mTextLabel.setText(mText + juce::String::fromUTF8("\xe2\x96\x8c"), // caret
+                     juce::dontSendNotification);
+}
+
+void KeyboardOverlay::addKey(const juce::String &cap,
+                             std::function<void()> action) {
+  auto *b = new juce::TextButton(cap);
+  b->setColour(juce::TextButton::buttonColourId, colours::idle);
+  b->setColour(juce::TextButton::textColourOffId, colours::text);
+  b->onClick = [this, action = std::move(action)] {
+    action();
+    refreshDisplay();
+  };
+  addAndMakeVisible(b);
+  mKeys.add(b);
+}
+
+void KeyboardOverlay::rebuildKeys() {
+  mKeys.clear();
+  const char *rows[] = {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+  for (const char *row : rows)
+    for (const char *p = row; *p; ++p) {
+      juce::juce_wchar ch = (juce::juce_wchar)*p;
+      const bool letter = juce::CharacterFunctions::isLetter(ch);
+      juce::String cap =
+          letter && !mShift ? juce::String::charToString(ch).toLowerCase()
+                            : juce::String::charToString(ch);
+      addKey(cap, [this, cap] {
+        if (mText.length() < 24)
+          mText += cap;
+        if (mShift) { // one-shot capitalisation, like a phone keyboard
+          mShift = false;
+          rebuildKeys();
+          resized();
+        }
+      });
+    }
+  addKey(mShift ? "shift*" : "SHIFT", [this] {
+    mShift = !mShift;
+    rebuildKeys();
+    resized();
+  });
+  addKey("SPACE", [this] {
+    if (mText.length() < 24)
+      mText += " ";
+  });
+  addKey(juce::String::fromUTF8("\xe2\x8c\xab"), [this] { // backspace
+    mText = mText.dropLastCharacters(1);
+  });
+  resized();
+}
+
+void KeyboardOverlay::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colour(0xf5141517));
+}
+
+void KeyboardOverlay::resized() {
+  auto area = getLocalBounds().reduced(juce::jmax(10, getWidth() / 30));
+  const int line = juce::jlimit(24, 40, getHeight() / 14);
+  const int gap = 6;
+  mPromptLabel.setBounds(area.removeFromTop(line));
+  mTextLabel.setBounds(area.removeFromTop(juce::jmax(44, line + 16)));
+  area.removeFromTop(gap);
+
+  auto footer = area.removeFromBottom(juce::jmax(48, line + 14));
   {
-    auto row = area.removeFromTop(juce::jmax(44, line + 14));
-    const int w = (row.getWidth() - gap) / 2;
-    for (auto &b : mRateButtons) {
-      b.setBounds(row.removeFromLeft(w));
+    const int w = (footer.getWidth() - gap) / 2;
+    mCancel.setBounds(footer.removeFromLeft(w));
+    mAccept.setBounds(footer.removeFromRight(w));
+  }
+  area.removeFromBottom(gap);
+
+  // Lay the keys out in the same row structure they were added in.
+  const int rowLens[] = {10, 10, 9, 7, 3}; // digits, qwerty, asdf, zxcv, controls
+  int idx = 0;
+  const int nRows = 5;
+  const int rowH = (area.getHeight() - gap * (nRows - 1)) / nRows;
+  for (int r = 0; r < nRows; ++r) {
+    auto row = area.removeFromTop(rowH);
+    const int n = rowLens[r];
+    const int w = (row.getWidth() - gap * (n - 1)) / n;
+    for (int i = 0; i < n && idx < mKeys.size(); ++i, ++idx) {
+      mKeys[idx]->setBounds(row.removeFromLeft(r == nRows - 1 ? row.getWidth() / (n - i)
+                                                              : w));
       row.removeFromLeft(gap);
     }
+    area.removeFromTop(gap);
   }
 }
 

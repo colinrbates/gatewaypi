@@ -37,14 +37,64 @@ public:
   std::function<void()> onOpenAudioSettings;
   std::function<void()> onOpenMidiLearn;
   std::function<void()> onShutdown;
+  std::function<void(int)> onRenameSlot; // long-press a slot -> rename it
 
 private:
+  // A preset slot button that also reports a long-press (hold ~0.5 s), used
+  // to open the rename keyboard.  Plain tap still selects the preset.
+  class SlotButton : public juce::TextButton, private juce::Timer {
+  public:
+    std::function<void()> onLongPress;
+    void mouseDown(const juce::MouseEvent &e) override {
+      mFired = false;
+      startTimer(500);
+      juce::TextButton::mouseDown(e);
+    }
+    void mouseUp(const juce::MouseEvent &e) override {
+      stopTimer();
+      juce::TextButton::mouseUp(e);
+    }
+
+  private:
+    void timerCallback() override {
+      stopTimer();
+      mFired = true;
+      if (onLongPress)
+        onLongPress();
+    }
+    bool mFired = false;
+  };
+
   PresetManager &mPresets;
-  std::array<juce::TextButton, kSlotsPerBank> mSlotButtons;
+  std::array<SlotButton, kSlotsPerBank> mSlotButtons;
   juce::TextButton mBankDown{"<"}, mBankUp{">"};
   juce::Label mBankLabel;
   juce::TextButton mBypass{"BYP"}, mMute{"TUNE"}, mSave{"SAVE"};
   juce::TextButton mLearn{"LEARN"}, mSettings{"AUDIO"}, mPower{"OFF"};
+};
+
+// Full-screen on-screen QWERTY for naming presets on the touchscreen (no
+// physical keyboard in a kiosk).  Child component, so touch works under cage.
+class KeyboardOverlay : public juce::Component {
+public:
+  KeyboardOverlay();
+  void setPrompt(const juce::String &prompt, const juce::String &initialText);
+  void resized() override;
+  void paint(juce::Graphics &g) override;
+
+  std::function<void(juce::String)> onAccept;
+  std::function<void()> onCancel;
+
+private:
+  void addKey(const juce::String &cap, std::function<void()> action);
+  void rebuildKeys();
+  void refreshDisplay();
+
+  juce::String mPrompt, mText;
+  bool mShift = true; // start capitalised (amp names read nicer)
+  juce::Label mPromptLabel, mTextLabel;
+  juce::OwnedArray<juce::TextButton> mKeys;      // rebuilt on shift toggle
+  juce::TextButton mCancel{"CANCEL"}, mAccept{"SAVE"};
 };
 
 // Touch overlay for binding footswitches in-app: tap an action, press a
@@ -100,24 +150,29 @@ public:
 private:
   void timerCallback() override;
   void rebuildDeviceButtons();
-  void openDevice(const juce::String &name);
-  void applyRateBuffer();
+  void reopen();
 
   const Config &mConfig;
   juce::Label mTitle, mStatus;
+  juce::Label mDeviceHeader, mInputHeader, mBufHeader, mRateHeader;
   juce::OwnedArray<juce::TextButton> mDeviceButtons;
-  juce::Label mDeviceHeader, mBufHeader, mRateHeader;
+  std::array<juce::TextButton, 3> mInputButtons; // In 1 / In 2 / Both
   std::array<juce::TextButton, 3> mBufButtons;
   std::array<juce::TextButton, 2> mRateButtons;
-  juce::TextButton mClose{"CLOSE"};
+  juce::TextButton mTest{"TEST TONE"}, mClose{"CLOSE"};
+
   juce::String mSelectedName;
+  int mInputMask = 3;      // bits 0/1 -> device capture channels
+  int mBufSel = 128;
+  double mRateSel = 48000.0;
 };
 
 // Static, self-contained audio-device configuration used by both the
 // watchdog and the AudioPanel.  Returns the number of live input channels
-// after the attempt (0 = input failed).  Standalone builds only.
+// after the attempt (0 = input failed).  inputChannelMask selects which
+// device capture channels feed the amp (bit0=in1, bit1=in2). Standalone only.
 int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
-                    int bufferSize);
+                    int bufferSize, int inputChannelMask = 3);
 juce::StringArray gpListDuplexDevices();
 
 // The standalone appliance editor: PresetBar on top, the untouched
@@ -139,6 +194,7 @@ private:
   void configureAudioDevice();
   void openAudioSettings();
   void openMidiLearn();
+  void openRename(int slot);
   void requestShutdown();
 
   NAMixAudioProcessor &mProcessor;
@@ -150,6 +206,7 @@ private:
   std::unique_ptr<MidiLearnOverlay> mLearnOverlay;
   std::unique_ptr<AudioPanel> mAudioPanel;
   std::unique_ptr<ConfirmOverlay> mConfirm;
+  std::unique_ptr<KeyboardOverlay> mKeyboard;
   std::unique_ptr<NAMixAudioProcessorEditor> mInner;
 
   // Last-seen model/IR paths — the inner editor is rebuilt when these move

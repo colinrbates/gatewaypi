@@ -81,7 +81,7 @@ index d88f9d7..86b8f6d 100644
 +endif()
 +
 diff --git a/src/PluginEditor.cpp b/src/PluginEditor.cpp
-index ac3d411..353d51c 100644
+index ac3d411..191e2ab 100644
 --- a/src/PluginEditor.cpp
 +++ b/src/PluginEditor.cpp
 @@ -147,6 +147,7 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
@@ -100,6 +100,41 @@ index ac3d411..353d51c 100644
  
    // --- Knobs (labels use Roboto-Regular 17px = DEFAULT_TEXT_SIZE+3) ---
    setupKnob(mInputGainSlider, mInputGainLabel, "Input");
+@@ -453,9 +455,15 @@ void NAMixAudioProcessorEditor::setupKnob(juce::Slider &slider, juce::Label &lab
+ }
+ 
+ void NAMixAudioProcessorEditor::chooseModelFile() {
++  auto startDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
++#if GATEWAYPI
++  // Default to the capture library so you're not starting at home every time.
++  auto captures = startDir.getChildFile("Captures");
++  if (captures.isDirectory())
++    startDir = captures;
++#endif
+   mFileChooser = std::make_unique<juce::FileChooser>(
+-      "Load NAM Model", juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+-      "*.nam");
++      "Load NAM Model", startDir, "*.nam");
+ 
+   mFileChooser->launchAsync(
+       juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+@@ -472,9 +480,14 @@ void NAMixAudioProcessorEditor::chooseModelFile() {
+ }
+ 
+ void NAMixAudioProcessorEditor::chooseIRFile() {
++  auto startDir = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
++#if GATEWAYPI
++  auto irs = startDir.getChildFile("IRs");
++  if (irs.isDirectory())
++    startDir = irs;
++#endif
+   mFileChooser = std::make_unique<juce::FileChooser>(
+-      "Load Impulse Response",
+-      juce::File::getSpecialLocation(juce::File::userHomeDirectory), "*.wav");
++      "Load Impulse Response", startDir, "*.wav");
+ 
+   mFileChooser->launchAsync(juce::FileBrowserComponent::openMode |
+                                 juce::FileBrowserComponent::canSelectFiles,
 diff --git a/src/PluginProcessor.cpp b/src/PluginProcessor.cpp
 index 8a795f9..80e5cff 100644
 --- a/src/PluginProcessor.cpp

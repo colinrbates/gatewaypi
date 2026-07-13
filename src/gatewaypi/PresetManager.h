@@ -48,6 +48,9 @@ public:
   juce::String getSlotName(int slot) const;
   bool isSlotOccupied(int slot) const;
 
+  // Rename the currently-selected slot and persist it.
+  void setCurrentSlotName(const juce::String &name);
+
   // Select and apply slot 0-3 of the current bank.  Empty slots just move
   // the selection (so Save can target them) without touching the processor.
   void selectSlot(int slot);
