@@ -42,10 +42,15 @@ installer is idempotent — safe to re-run after changing anything.
   shows a vintage-style analog needle tuner — ivory dial, damped needle,
   flat/tune/sharp lamps, LCD note window (McLeod pitch method, accurate to
   well under a cent, down to a 5-string's low B).
-- **Dial in a tone**: pick a model + IR, tweak — **changes autosave to the
-  active slot** (a couple of seconds behind you, and always flushed before a
-  preset switch). SAVE forces it immediately. Set `"autosavePresets": false`
-  for classic tweak-freely-save-explicitly behaviour.
+- **Dial in a tone**: pick a model + IR, tweak level/EQ/gate — **every dial
+  is saved per preset** and autosaves to the active slot (a couple of seconds
+  behind you, always flushed before a preset switch). SAVE forces it
+  immediately. Set `"autosavePresets": false` for classic
+  tweak-freely-save-explicitly behaviour.
+- **Preset names follow the capture**: load a capture into a slot and the
+  nickname becomes the capture's filename; swap the capture and the name
+  updates too. Long-press a slot to type a custom name — that pins it
+  (`customName` in the preset JSON), so swapping captures won't rename it.
 - **Footswitches — no pedal programming needed**: tap **LEARN**, tap an
   action (Preset 1-4, bank up/down, bypass, tuner), press a footswitch —
   the app binds whatever the pedal sends (PC, CC or note) and remembers it

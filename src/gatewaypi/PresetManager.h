@@ -79,7 +79,7 @@ private:
 
   // Current processor state (model, IR, params) as a preset var / compact
   // JSON string — the basis of both saving and autosave dirty-checking.
-  juce::var buildPresetVar(const juce::String &name) const;
+  juce::var buildPresetVar(const juce::String &name, bool custom = false) const;
   juce::String snapshot() const;
   void maybeAutosave(); // flush pending edits to the active slot
 

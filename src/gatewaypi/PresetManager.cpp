@@ -134,7 +134,8 @@ void PresetManager::applySlot(int slot) {
     onChanged();
 }
 
-juce::var PresetManager::buildPresetVar(const juce::String &name) const {
+juce::var PresetManager::buildPresetVar(const juce::String &name,
+                                        bool custom) const {
   auto *params = new juce::DynamicObject();
   for (auto *p : mProcessor.getParameters())
     if (auto *rp = dynamic_cast<juce::RangedAudioParameter *>(p))
@@ -142,6 +143,7 @@ juce::var PresetManager::buildPresetVar(const juce::String &name) const {
 
   auto *obj = new juce::DynamicObject();
   obj->setProperty("name", name);
+  obj->setProperty("customName", custom); // true = pinned, don't auto-rename
   obj->setProperty("model", mProcessor.getModelPath());
   obj->setProperty("ir", mProcessor.getIRPath());
   obj->setProperty("params", juce::var(params));
@@ -161,23 +163,30 @@ void PresetManager::saveCurrentSlot() {
   const juce::String defaultName =
       juce::String("Preset ") + juce::String(slotNumber(mBank, mSlot));
 
-  // Preserve an existing custom name; default to "Preset N".
-  juce::String name = defaultName;
+  // The nickname follows the capture unless the user typed one by hand.
+  // That's tracked by the "customName" flag; anything without it (fresh
+  // slots and legacy auto-names alike) follows the loaded capture.
+  juce::String oldName = defaultName;
+  bool custom = false;
   if (f.existsAsFile()) {
     const auto old = juce::JSON::parse(f.loadFileAsString());
-    if (auto *obj = old.getDynamicObject())
+    if (auto *obj = old.getDynamicObject()) {
       if (obj->hasProperty("name"))
-        name = obj->getProperty("name").toString();
+        oldName = obj->getProperty("name").toString();
+      custom = (bool)obj->getProperty("customName");
+    }
   }
 
-  // Auto-name from the loaded capture's filename while the name is still a
-  // default — so a fresh slot picks up "Fender Twin" instead of "Preset 3".
-  // A name the user chose (anything else) is left untouched.
-  if ((name.isEmpty() || name == defaultName) &&
-      mProcessor.getModelPath().isNotEmpty())
-    name = juce::File(mProcessor.getModelPath()).getFileNameWithoutExtension();
+  const juce::String modelStem =
+      mProcessor.getModelPath().isNotEmpty()
+          ? juce::File(mProcessor.getModelPath()).getFileNameWithoutExtension()
+          : juce::String();
 
-  f.replaceWithText(juce::JSON::toString(buildPresetVar(name), false));
+  juce::String name = oldName;
+  if (!custom && modelStem.isNotEmpty())
+    name = modelStem; // follow the (possibly new) capture
+
+  f.replaceWithText(juce::JSON::toString(buildPresetVar(name, custom), false));
   mPersistedSnapshot = snapshot();
   if (onChanged)
     onChanged();
@@ -188,7 +197,8 @@ void PresetManager::setCurrentSlotName(const juce::String &name) {
   const juce::String clean = name.trim();
   if (clean.isEmpty())
     return;
-  f.replaceWithText(juce::JSON::toString(buildPresetVar(clean), false));
+  // A hand-typed name is custom: pin it so swapping captures won't rename it.
+  f.replaceWithText(juce::JSON::toString(buildPresetVar(clean, true), false));
   mPersistedSnapshot = snapshot();
   if (onChanged)
     onChanged();
