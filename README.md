@@ -21,7 +21,9 @@ shell, boot-to-app system integration, and model/IR import.
 
 ## Install
 
-Flash **Raspberry Pi OS Lite (64-bit)**, boot, get on the network, then:
+Flash **Raspberry Pi OS Lite (64-bit)** (the full Desktop image also works —
+the installer disables the desktop session so the amp owns the screen), boot,
+get on the network, then:
 
 ```sh
 git clone https://github.com/colinrbates/gatewaypi.git && cd gatewaypi
@@ -97,6 +99,11 @@ Presets are plain JSON in `/var/lib/gatewaypi/presets/`, named `NN-name.json`
   `audioDeviceMatch` to a substring of the name shown there.
 - **Crackles/xruns**: raise `bufferSize` to 256; check the interface is on a
   USB 3 port by itself; confirm `threadirqs` is in `/boot/firmware/cmdline.txt`.
+- **Boots to the Raspberry Pi desktop instead of the amp**: you're on a
+  desktop image and installed with an older installer — run
+  `sudo systemctl disable lightdm && sudo reboot` (or re-run `install.sh`,
+  which now does this for you). Restore the desktop later with
+  `sudo systemctl enable lightdm`.
 - **Blank screen**: cage needs XWayland (`sudo apt install xwayland`); check
   `journalctl -u gatewaypi-kiosk`.
 - **BLE pedal won't reconnect**: it may be paired to your phone — forget it

@@ -139,6 +139,18 @@ echo "==> 5/5 Enabling services"
 systemctl daemon-reload
 udevadm control --reload
 systemctl disable getty@tty1.service > /dev/null 2>&1 || true
+
+# On a desktop image (full Raspberry Pi OS) the display manager owns the
+# screen at boot and the kiosk can't take the seat.  Disable it — the amp
+# owns the screen now.  Deliberately not stopped here in case this install
+# is running inside that desktop session; it stays up until reboot.
+if [ -L /etc/systemd/system/display-manager.service ]; then
+  DM=$(basename "$(readlink -f /etc/systemd/system/display-manager.service)")
+  systemctl disable "$DM" > /dev/null 2>&1 || true
+  echo "    desktop session ($DM) disabled so the amp owns the screen"
+  echo "    (restore the desktop anytime: sudo systemctl enable $DM && sudo reboot)"
+fi
+
 systemctl enable gatewaypi-kiosk gatewaypi-tuning gatewaypi-blemidi gatewaypi-webui
 systemctl set-default graphical.target > /dev/null
 
