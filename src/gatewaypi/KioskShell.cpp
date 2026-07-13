@@ -91,7 +91,9 @@ void PresetBar::refresh() {
                      juce::dontSendNotification);
     b.setAlpha(mPresets.isSlotOccupied(i) ? 1.0f : 0.55f);
   }
-  mBankLabel.setText("BANK " + juce::String(mPresets.getBank() + 1) + "/" +
+  // Compact so a big, readable font fits the narrow column (the flanking
+  // < > arrows make clear it's the bank selector).
+  mBankLabel.setText("BANK\n" + juce::String(mPresets.getBank() + 1) + "/" +
                          juce::String(mPresets.getNumBanks()),
                      juce::dontSendNotification);
   mBypass.setToggleState(mPresets.getBypass(), juce::dontSendNotification);
@@ -124,6 +126,11 @@ void PresetBar::resized() {
     row2.removeFromLeft(gap);
   }
   mPower.setBounds(row2);
+
+  // The bank indicator is a label, so it doesn't pick up the button font —
+  // size it explicitly (bold, ~half its row height) to match.
+  mBankLabel.setFont(juce::Font(juce::FontOptions(
+      juce::jlimit(14.0f, 30.0f, row2.getHeight() * 0.42f), juce::Font::bold)));
 }
 
 // ---------------------------------------------------------------------------

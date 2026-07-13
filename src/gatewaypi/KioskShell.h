@@ -29,7 +29,7 @@ namespace gatewaypi {
 struct GatewayPiLookAndFeel : juce::LookAndFeel_V4 {
   juce::Font getTextButtonFont(juce::TextButton &, int buttonHeight) override {
     return juce::Font(juce::FontOptions(
-        juce::jlimit(18.0f, 34.0f, buttonHeight * 0.5f), juce::Font::bold));
+        juce::jlimit(20.0f, 44.0f, buttonHeight * 0.62f), juce::Font::bold));
   }
 };
 
