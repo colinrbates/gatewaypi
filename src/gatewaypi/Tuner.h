@@ -40,6 +40,7 @@ private:
   NAMixAudioProcessor &mProcessor;
   TunerEngine mEngine;
   TunerEngine::Reading mReading;
+  float mNeedle = -55.0f; // displayed needle position (cents; damped)
   float mReadBuf[2048];
 };
 

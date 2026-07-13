@@ -45,6 +45,10 @@ PresetBar::PresetBar(PresetManager &presets) : mPresets(presets) {
   mBypass.onClick = [this] { mPresets.toggleBypass(); };
   mMute.onClick = [this] { mPresets.toggleMute(); };
   mSave.onClick = [this] { mPresets.saveCurrentSlot(); };
+  mLearn.onClick = [this] {
+    if (onOpenMidiLearn)
+      onOpenMidiLearn();
+  };
   mSettings.onClick = [this] {
     if (onOpenAudioSettings)
       onOpenAudioSettings();
@@ -54,7 +58,8 @@ PresetBar::PresetBar(PresetManager &presets) : mPresets(presets) {
       onShutdown();
   };
 
-  for (auto *b : {&mBankDown, &mBankUp, &mBypass, &mMute, &mSave, &mSettings, &mPower}) {
+  for (auto *b : {&mBankDown, &mBankUp, &mBypass, &mMute, &mSave, &mLearn,
+                  &mSettings, &mPower}) {
     b->setColour(juce::TextButton::buttonColourId, colours::idle);
     b->setColour(juce::TextButton::buttonOnColourId, colours::warn);
     b->setColour(juce::TextButton::textColourOffId, colours::text);
@@ -102,23 +107,115 @@ void PresetBar::resized() {
 
   // Row 2: bank navigation and utility buttons.
   auto row2 = area.withTrimmedTop(gap);
-  const int n = 8; // <, label, >, BYP, MUTE, SAVE, AUDIO, OFF
+  const int n = 9; // <, label, >, BYP, TUNE, SAVE, LEARN, AUDIO, OFF
   const int w = (row2.getWidth() - gap * (n - 1)) / n;
-  mBankDown.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mBankLabel.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mBankUp.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mBypass.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mMute.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mSave.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
-  mSettings.setBounds(row2.removeFromLeft(w));
-  row2.removeFromLeft(gap);
+  for (auto *c : std::initializer_list<juce::Component *>{
+           &mBankDown, &mBankLabel, &mBankUp, &mBypass, &mMute, &mSave,
+           &mLearn, &mSettings}) {
+    c->setBounds(row2.removeFromLeft(w));
+    row2.removeFromLeft(gap);
+  }
   mPower.setBounds(row2);
+}
+
+// ---------------------------------------------------------------------------
+// MidiLearnOverlay
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr MidiAction kAllActions[] = {
+    MidiAction::Slot1, MidiAction::Slot2, MidiAction::Slot3, MidiAction::Slot4,
+    MidiAction::BankDown, MidiAction::BankUp, MidiAction::Bypass,
+    MidiAction::Tuner};
+}
+
+MidiLearnOverlay::MidiLearnOverlay(MidiEngine &midi) : mMidi(midi) {
+  mTitle.setText("MIDI learn", juce::dontSendNotification);
+  mTitle.setJustificationType(juce::Justification::centred);
+  mTitle.setColour(juce::Label::textColourId, colours::active);
+  addAndMakeVisible(mTitle);
+
+  mStatus.setText("Tap an action, then press a footswitch.",
+                  juce::dontSendNotification);
+  mStatus.setJustificationType(juce::Justification::centred);
+  mStatus.setColour(juce::Label::textColourId, colours::text);
+  addAndMakeVisible(mStatus);
+
+  for (int i = 0; i < kNumActions; ++i) {
+    auto &b = mActionButtons[(size_t)i];
+    b.setColour(juce::TextButton::buttonColourId, colours::idle);
+    b.setColour(juce::TextButton::buttonOnColourId, colours::active);
+    b.setColour(juce::TextButton::textColourOffId, colours::text);
+    b.setColour(juce::TextButton::textColourOnId, colours::bg);
+    b.onClick = [this, i] { armAction(kAllActions[i]); };
+    addAndMakeVisible(b);
+  }
+  refreshBindings();
+
+  mDone.setColour(juce::TextButton::buttonColourId, colours::active);
+  mDone.setColour(juce::TextButton::textColourOffId, colours::bg);
+  mDone.onClick = [this] {
+    mMidi.setLearnTarget(std::nullopt);
+    if (onClose)
+      onClose();
+  };
+  addAndMakeVisible(mDone);
+}
+
+void MidiLearnOverlay::refreshBindings() {
+  for (int i = 0; i < kNumActions; ++i) {
+    const auto a = kAllActions[i];
+    mActionButtons[(size_t)i].setButtonText(
+        juce::String(midiActionLabel(a)) + juce::String::fromUTF8(" \xc2\xb7 ") +
+        mMidi.describeBinding(a));
+    mActionButtons[(size_t)i].setToggleState(false, juce::dontSendNotification);
+  }
+}
+
+void MidiLearnOverlay::armAction(MidiAction a) {
+  refreshBindings();
+  for (int i = 0; i < kNumActions; ++i)
+    if (kAllActions[i] == a)
+      mActionButtons[(size_t)i].setToggleState(true, juce::dontSendNotification);
+  mStatus.setText(juce::String("Press a footswitch for \"") +
+                      midiActionLabel(a) + "\"...",
+                  juce::dontSendNotification);
+  mMidi.setLearnTarget(
+      a, [safe = juce::Component::SafePointer<MidiLearnOverlay>(this),
+          a](juce::String desc) {
+        if (safe == nullptr)
+          return;
+        safe->refreshBindings();
+        safe->mStatus.setText(juce::String(midiActionLabel(a)) + " = " + desc +
+                                  ". Tap another action or DONE.",
+                              juce::dontSendNotification);
+      });
+}
+
+void MidiLearnOverlay::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colour(0xf2141517));
+}
+
+void MidiLearnOverlay::resized() {
+  auto area = getLocalBounds().reduced(juce::jmax(12, getWidth() / 16));
+  mTitle.setFont(juce::FontOptions((float)getHeight() * 0.05f, juce::Font::bold));
+  mTitle.setBounds(area.removeFromTop(area.getHeight() / 10));
+  mStatus.setBounds(area.removeFromTop(area.getHeight() / 9));
+  auto footer = area.removeFromBottom(area.getHeight() / 6);
+  const int gap = 8;
+  area.removeFromBottom(gap);
+
+  // 2 columns x 4 rows of action buttons.
+  const int rows = 4, cols = 2;
+  const int cw = (area.getWidth() - gap * (cols - 1)) / cols;
+  const int rh = (area.getHeight() - gap * (rows - 1)) / rows;
+  for (int i = 0; i < kNumActions; ++i) {
+    const int r = i % rows, c = i / rows;
+    mActionButtons[(size_t)i].setBounds(area.getX() + c * (cw + gap),
+                                        area.getY() + r * (rh + gap), cw, rh);
+  }
+  mDone.setBounds(footer.withSizeKeepingCentre(footer.getWidth() / 3,
+                                               footer.getHeight() - 8));
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +229,7 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
       mBar(*mPresets), mTuner(proc, mConfig.tunerReference) {
   mPresets->onChanged = [this] { refresh(); };
   mBar.onOpenAudioSettings = [this] { openAudioSettings(); };
+  mBar.onOpenMidiLearn = [this] { openMidiLearn(); };
   mBar.onShutdown = [this] { requestShutdown(); };
   addAndMakeVisible(mBar);
   addChildComponent(mTuner);
@@ -184,7 +282,9 @@ void KioskShell::recreateInnerEditor() {
   mLastModelPath = mProcessor.getModelPath();
   mLastIRPath = mProcessor.getIRPath();
   addAndMakeVisible(*mInner);
-  mTuner.toFront(false); // the overlay always covers the panel when visible
+  mTuner.toFront(false); // overlays always cover the panel when visible
+  if (mLearnOverlay != nullptr)
+    mLearnOverlay->toFront(false);
   resized();
 }
 
@@ -195,6 +295,8 @@ void KioskShell::resized() {
   const int barH = juce::jlimit(96, 176, area.getHeight() / (portrait ? 8 : 5));
   mBar.setBounds(area.removeFromTop(barH));
   mTuner.setBounds(area);
+  if (mLearnOverlay != nullptr)
+    mLearnOverlay->setBounds(area);
 
   if (mInner == nullptr)
     return;
@@ -260,6 +362,20 @@ void KioskShell::configureAudioDevice() {
     }
   }
 #endif
+}
+
+void KioskShell::openMidiLearn() {
+  if (mMidi == nullptr)
+    return;
+  if (mLearnOverlay == nullptr) {
+    mLearnOverlay = std::make_unique<MidiLearnOverlay>(*mMidi);
+    mLearnOverlay->onClose = [this] { mLearnOverlay->setVisible(false); };
+    addChildComponent(*mLearnOverlay);
+  }
+  mLearnOverlay->refreshBindings();
+  mLearnOverlay->setVisible(true);
+  mLearnOverlay->toFront(false);
+  resized();
 }
 
 void KioskShell::openAudioSettings() {

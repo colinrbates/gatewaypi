@@ -29,7 +29,11 @@ int prefixOf(const juce::File &f) {
 } // namespace
 
 PresetManager::PresetManager(NAMixAudioProcessor &proc, const Config &config)
-    : mProcessor(proc), mConfig(config) {}
+    : mProcessor(proc), mConfig(config) {
+  mPersistedSnapshot = snapshot(); // defaults are not "unsaved edits"
+  if (mConfig.autosavePresets)
+    startTimer(2000); // debounced autosave tick
+}
 
 juce::File PresetManager::slotFile(int bank, int slot) const {
   const int n = slotNumber(bank, slot);
@@ -67,12 +71,14 @@ juce::String PresetManager::getSlotName(int slot) const {
 }
 
 void PresetManager::setBank(int bank) {
+  maybeAutosave(); // the active slot still belongs to the old bank
   mBank = juce::jlimit(0, juce::jmax(0, getNumBanks() - 1), bank);
   if (onChanged)
     onChanged();
 }
 
 void PresetManager::selectSlot(int slot) {
+  maybeAutosave(); // never lose a tweak to a quick preset change
   mSlot = juce::jlimit(0, kSlotsPerBank - 1, slot);
   if (isSlotOccupied(mSlot))
     applySlot(mSlot);
@@ -115,9 +121,32 @@ void PresetManager::applySlot(int slot) {
   mProcessor.gpSetBypass(false);
   mProcessor.gpSetMute(false);
 
+  mPersistedSnapshot = snapshot(); // freshly applied == on disk
   persistState();
   if (onChanged)
     onChanged();
+}
+
+juce::var PresetManager::buildPresetVar(const juce::String &name) const {
+  auto *params = new juce::DynamicObject();
+  for (auto *p : mProcessor.getParameters())
+    if (auto *rp = dynamic_cast<juce::RangedAudioParameter *>(p))
+      params->setProperty(rp->paramID, rp->convertFrom0to1(rp->getValue()));
+
+  auto *obj = new juce::DynamicObject();
+  obj->setProperty("name", name);
+  obj->setProperty("model", mProcessor.getModelPath());
+  obj->setProperty("ir", mProcessor.getIRPath());
+  obj->setProperty("params", juce::var(params));
+  return juce::var(obj);
+}
+
+juce::String PresetManager::snapshot() const {
+  const auto f = slotFile(mBank, mSlot);
+  juce::String name = getSlotName(mSlot);
+  if (!f.existsAsFile())
+    name = juce::String("Preset ") + juce::String(slotNumber(mBank, mSlot));
+  return juce::JSON::toString(buildPresetVar(name), true);
 }
 
 void PresetManager::saveCurrentSlot() {
@@ -132,21 +161,20 @@ void PresetManager::saveCurrentSlot() {
         name = obj->getProperty("name").toString();
   }
 
-  auto *params = new juce::DynamicObject();
-  for (auto *p : mProcessor.getParameters())
-    if (auto *rp = dynamic_cast<juce::RangedAudioParameter *>(p))
-      params->setProperty(rp->paramID, rp->convertFrom0to1(rp->getValue()));
-
-  auto *obj = new juce::DynamicObject();
-  obj->setProperty("name", name);
-  obj->setProperty("model", mProcessor.getModelPath());
-  obj->setProperty("ir", mProcessor.getIRPath());
-  obj->setProperty("params", juce::var(params));
-
-  f.replaceWithText(juce::JSON::toString(juce::var(obj), false));
+  f.replaceWithText(juce::JSON::toString(buildPresetVar(name), false));
+  mPersistedSnapshot = snapshot();
   if (onChanged)
     onChanged();
 }
+
+void PresetManager::maybeAutosave() {
+  if (!mConfig.autosavePresets)
+    return;
+  if (snapshot() != mPersistedSnapshot)
+    saveCurrentSlot();
+}
+
+void PresetManager::timerCallback() { maybeAutosave(); }
 
 bool PresetManager::getBypass() const { return mProcessor.gpGetBypass(); }
 bool PresetManager::getMute() const { return mProcessor.gpGetMute(); }
@@ -181,8 +209,11 @@ void PresetManager::restoreLastState() {
     mSlot = slot;
     if (isSlotOccupied(slot))
       applySlot(slot);
-    else if (onChanged)
-      onChanged();
+    else {
+      mPersistedSnapshot = snapshot();
+      if (onChanged)
+        onChanged();
+    }
   }
 }
 

@@ -7,5 +7,6 @@
   "audioDeviceMatch": "iTwo",
   "sampleRate": 48000,
   "bufferSize": 128,
-  "bleMidiMac": ""
+  "bleMidiMac": "",
+  "autosavePresets": true
 }

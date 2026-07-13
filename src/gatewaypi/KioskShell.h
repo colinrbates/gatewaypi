@@ -35,6 +35,7 @@ public:
   void paint(juce::Graphics &g) override;
 
   std::function<void()> onOpenAudioSettings;
+  std::function<void()> onOpenMidiLearn;
   std::function<void()> onShutdown;
 
 private:
@@ -43,7 +44,30 @@ private:
   juce::TextButton mBankDown{"<"}, mBankUp{">"};
   juce::Label mBankLabel;
   juce::TextButton mBypass{"BYP"}, mMute{"TUNE"}, mSave{"SAVE"};
-  juce::TextButton mSettings{"AUDIO"}, mPower{"OFF"};
+  juce::TextButton mLearn{"LEARN"}, mSettings{"AUDIO"}, mPower{"OFF"};
+};
+
+// Touch overlay for binding footswitches in-app: tap an action, press a
+// footswitch, done — the binding is stored in config.json.  No pedal-side
+// (CubeSuite) programming required.
+class MidiLearnOverlay : public juce::Component {
+public:
+  explicit MidiLearnOverlay(MidiEngine &midi);
+
+  void refreshBindings();
+  void resized() override;
+  void paint(juce::Graphics &g) override;
+
+  std::function<void()> onClose;
+
+private:
+  void armAction(MidiAction a);
+
+  MidiEngine &mMidi;
+  static constexpr int kNumActions = 8;
+  std::array<juce::TextButton, kNumActions> mActionButtons;
+  juce::Label mTitle, mStatus;
+  juce::TextButton mDone{"DONE"};
 };
 
 // The standalone appliance editor: PresetBar on top, the untouched
@@ -64,6 +88,7 @@ private:
   void recreateInnerEditor();
   void configureAudioDevice();
   void openAudioSettings();
+  void openMidiLearn();
   void requestShutdown();
 
   NAMixAudioProcessor &mProcessor;
@@ -72,6 +97,7 @@ private:
   std::unique_ptr<MidiEngine> mMidi;
   PresetBar mBar;
   TunerOverlay mTuner;
+  std::unique_ptr<MidiLearnOverlay> mLearnOverlay;
   std::unique_ptr<NAMixAudioProcessorEditor> mInner;
 
   // Last-seen model/IR paths — the inner editor is rebuilt when these move

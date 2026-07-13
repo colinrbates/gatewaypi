@@ -37,11 +37,21 @@ installer is idempotent — safe to re-run after changing anything.
 - **Touchscreen** — the Gateway panel (model/IR pickers, gate, EQ, levels)
   with a preset strip above it: 4 slots, bank arrows, BYP / TUNE / SAVE,
   AUDIO (device picker) and OFF (safe shutdown). TUNE mutes the output and
-  shows a chromatic tuner (McLeod pitch method, accurate to well under a
-  cent, down to a 5-string's low B).
-- **Dial in a tone**: pick a model + IR, tweak, hit **SAVE** — it lands in
-  the selected slot.
-- **Footswitches** (program the Chocolate once in M-Vave's CubeSuite app):
+  shows a vintage-style analog needle tuner — ivory dial, damped needle,
+  flat/tune/sharp lamps, LCD note window (McLeod pitch method, accurate to
+  well under a cent, down to a 5-string's low B).
+- **Dial in a tone**: pick a model + IR, tweak — **changes autosave to the
+  active slot** (a couple of seconds behind you, and always flushed before a
+  preset switch). SAVE forces it immediately. Set `"autosavePresets": false`
+  for classic tweak-freely-save-explicitly behaviour.
+- **Footswitches — no pedal programming needed**: tap **LEARN**, tap an
+  action (Preset 1-4, bank up/down, bypass, tuner), press a footswitch —
+  the app binds whatever the pedal sends (PC, CC or note) and remembers it
+  in `config.json`. With the Chocolate's factory settings its four switches
+  cover the four preset slots; getting distinct hold-messages for the other
+  four actions is a pedal-side feature (one CubeSuite visit), or map them
+  to a second bank/mode of the pedal. The defaults, if you'd rather program
+  the Chocolate to match:
 
 | Switch | Message | Action |
 |---|---|---|
@@ -69,6 +79,8 @@ installer is idempotent — safe to re-run after changing anything.
   "sampleRate": 48000,
   "bufferSize": 128,           // try 64 once stable; 256 if you hear xruns
   "tunerReference": 440,       // A4 reference pitch
+  "autosavePresets": true,     // tweaks persist to the active slot
+  "midiMap": {},               // written by the LEARN screen
   "bleMidiMac": ""             // set by ble-pair.sh
 }
 ```

@@ -23,6 +23,7 @@ struct Config {
   juce::File modelsDir;
   juce::File irsDir;
   juce::File stateFile;
+  juce::File configFile;
 
   // config.json settings
   int midiChannel = 0;           // 0 = omni, 1-16 = specific channel
@@ -34,6 +35,8 @@ struct Config {
   double sampleRate = 48000.0;
   int bufferSize = 128;
   double tunerReference = 440.0; // A4 reference pitch (Hz)
+  bool autosavePresets = true;   // persist tweaks to the active slot
+  juce::var midiMap;             // learned bindings: {action: {type, number}}
 
   static Config load() {
     Config c;
@@ -51,9 +54,9 @@ struct Config {
     for (const auto &d : {c.presetsDir, c.modelsDir, c.irsDir})
       d.createDirectory();
 
-    const auto configFile = c.dataRoot.getChildFile("config.json");
-    if (configFile.existsAsFile()) {
-      const auto parsed = juce::JSON::parse(configFile.loadFileAsString());
+    c.configFile = c.dataRoot.getChildFile("config.json");
+    if (c.configFile.existsAsFile()) {
+      const auto parsed = juce::JSON::parse(c.configFile.loadFileAsString());
       if (auto *obj = parsed.getDynamicObject()) {
         c.midiChannel = (int)obj->getProperty("midiChannel");
         if (obj->hasProperty("ccBankDown")) c.ccBankDown = (int)obj->getProperty("ccBankDown");
@@ -66,9 +69,25 @@ struct Config {
         if (obj->hasProperty("bufferSize")) c.bufferSize = (int)obj->getProperty("bufferSize");
         if (obj->hasProperty("tunerReference"))
           c.tunerReference = (double)obj->getProperty("tunerReference");
+        if (obj->hasProperty("autosavePresets"))
+          c.autosavePresets = (bool)obj->getProperty("autosavePresets");
+        c.midiMap = obj->getProperty("midiMap");
       }
     }
     return c;
+  }
+
+  // Merge one key into config.json, preserving everything else (and any
+  // hand-edits made since load).  Message thread only.
+  static void updateConfigKey(const juce::File &configFile,
+                              const juce::String &key, const juce::var &value) {
+    juce::var root;
+    if (configFile.existsAsFile())
+      root = juce::JSON::parse(configFile.loadFileAsString());
+    if (root.getDynamicObject() == nullptr)
+      root = juce::var(new juce::DynamicObject());
+    root.getDynamicObject()->setProperty(key, value);
+    configFile.replaceWithText(juce::JSON::toString(root, false));
   }
 };
 

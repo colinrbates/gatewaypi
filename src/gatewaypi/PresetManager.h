@@ -26,9 +26,15 @@ constexpr int kSlotsPerBank = 4;
 // <dataRoot>/presets named "NN-anything.json"; NN (two digits, 1-based)
 // determines the global slot: NN 01-04 = bank 1, 05-08 = bank 2, etc.
 // Slots without a file are empty and selectable only for saving.
-class PresetManager {
+//
+// With config.autosavePresets (default on), edits to the active slot —
+// knobs, model, IR — are persisted automatically: debounced a couple of
+// seconds behind the last change, and flushed immediately before switching
+// slot or bank so a quick preset change never loses a tweak.
+class PresetManager : private juce::Timer {
 public:
   PresetManager(NAMixAudioProcessor &proc, const Config &config);
+  ~PresetManager() override { stopTimer(); }
 
   // Called after any change (preset applied/saved, bank moved, bypass/mute).
   // The UI subscribes to refresh itself.
@@ -60,15 +66,24 @@ public:
   void restoreLastState();
 
 private:
+  void timerCallback() override;
+
   juce::File slotFile(int bank, int slot) const;
   void setBank(int bank);
   void applySlot(int slot);
   void persistState() const;
 
+  // Current processor state (model, IR, params) as a preset var / compact
+  // JSON string — the basis of both saving and autosave dirty-checking.
+  juce::var buildPresetVar(const juce::String &name) const;
+  juce::String snapshot() const;
+  void maybeAutosave(); // flush pending edits to the active slot
+
   NAMixAudioProcessor &mProcessor;
   Config mConfig;
   int mBank = 0; // 0-based
   int mSlot = 0; // 0-based within bank
+  juce::String mPersistedSnapshot; // last state known to be on disk
 };
 
 } // namespace gatewaypi
