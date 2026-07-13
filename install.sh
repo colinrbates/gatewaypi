@@ -121,12 +121,28 @@ echo "    installed $BIN/gatewaypi"
 # ---------------------------------------------------------------------------
 echo "==> 3/5 Library and helper scripts"
 # ---------------------------------------------------------------------------
-mkdir -p "$DATA"/{models,irs,presets}
+mkdir -p "$DATA/presets"
 [ -f "$DATA/config.json" ] || cp "$BUNDLE_DIR/config/config.json" "$DATA/"
 for p in "$BUNDLE_DIR"/config/presets/*.json; do
   [ -f "$DATA/presets/$(basename "$p")" ] || cp "$p" "$DATA/presets/"
 done
 chown -R "$APP_USER:$APP_USER" "$DATA"
+
+# Captures (.nam) and IRs (.wav) live in home-level folders, next to Desktop.
+APP_HOME=$(getent passwd "$APP_USER" | cut -d: -f6)
+CAPTURES_DIR="$APP_HOME/Captures"
+IRS_DIR="$APP_HOME/IRs"
+mkdir -p "$CAPTURES_DIR" "$IRS_DIR"
+# Migrate any files from the old /var/lib layout, then drop the empty dirs.
+if [ -d "$DATA/models" ]; then
+  find "$DATA/models" -type f -exec mv -n {} "$CAPTURES_DIR/" \; 2>/dev/null || true
+  rmdir "$DATA/models" 2>/dev/null || true
+fi
+if [ -d "$DATA/irs" ]; then
+  find "$DATA/irs" -type f -exec mv -n {} "$IRS_DIR/" \; 2>/dev/null || true
+  rmdir "$DATA/irs" 2>/dev/null || true
+fi
+chown -R "$APP_USER:$APP_USER" "$CAPTURES_DIR" "$IRS_DIR"
 
 install -m 755 "$BUNDLE_DIR/system/ble-midi-connect.sh" "$BIN/"
 install -m 755 "$BUNDLE_DIR/system/ble-pair.sh" "$BIN/"
@@ -140,6 +156,15 @@ usermod -aG audio,video,render,input "$APP_USER" 2>/dev/null \
   || usermod -aG audio,video "$APP_USER"
 
 install -m 644 "$BUNDLE_DIR/system/95-gatewaypi-audio.conf" /etc/security/limits.d/
+
+# Free the USB interface from the desktop sound server: PipeWire/PulseAudio
+# grab USB audio devices and block the app's direct-ALSA (hw:) capture.
+# This is a dedicated amp, so the userspace sound servers are masked.
+systemctl --global mask pipewire.socket pipewire pipewire-pulse.socket \
+  pipewire-pulse wireplumber pulseaudio.socket pulseaudio > /dev/null 2>&1 || true
+sudo -u "$APP_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$APP_USER")" \
+  systemctl --user stop pipewire pipewire-pulse wireplumber pulseaudio \
+  > /dev/null 2>&1 || true
 
 sed "s/@USER@/$APP_USER/g" "$BUNDLE_DIR/system/gatewaypi-sudoers" > /etc/sudoers.d/gatewaypi
 chmod 0440 /etc/sudoers.d/gatewaypi

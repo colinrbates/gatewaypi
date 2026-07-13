@@ -46,15 +46,17 @@ struct Config {
     c.dataRoot = env.isNotEmpty() ? juce::File(env)
                                   : juce::File("/var/lib/gatewaypi");
     c.presetsDir = c.dataRoot.getChildFile("presets");
-    c.modelsDir = c.dataRoot.getChildFile("models");
-    c.irsDir = c.dataRoot.getChildFile("irs");
     c.stateFile = c.dataRoot.getChildFile("state.json");
-
-    // Ensure the layout exists so first run works on an empty data dir.
-    for (const auto &d : {c.presetsDir, c.modelsDir, c.irsDir})
-      d.createDirectory();
-
     c.configFile = c.dataRoot.getChildFile("config.json");
+
+    // Captures (.nam) and IRs (.wav) live in friendly home-level folders,
+    // next to Desktop — visible in the file manager, easy to browse from
+    // another machine.  Overridable via config.json or env for testing.
+    const juce::File home = juce::File::getSpecialLocation(
+        juce::File::userHomeDirectory);
+    c.modelsDir = home.getChildFile("Captures");
+    c.irsDir = home.getChildFile("IRs");
+
     if (c.configFile.existsAsFile()) {
       const auto parsed = juce::JSON::parse(c.configFile.loadFileAsString());
       if (auto *obj = parsed.getDynamicObject()) {
@@ -71,9 +73,17 @@ struct Config {
           c.tunerReference = (double)obj->getProperty("tunerReference");
         if (obj->hasProperty("autosavePresets"))
           c.autosavePresets = (bool)obj->getProperty("autosavePresets");
+        if (obj->hasProperty("capturesDir"))
+          c.modelsDir = juce::File(obj->getProperty("capturesDir").toString());
+        if (obj->hasProperty("irsDir"))
+          c.irsDir = juce::File(obj->getProperty("irsDir").toString());
         c.midiMap = obj->getProperty("midiMap");
       }
     }
+
+    // Ensure the layout exists so first run works on an empty data dir.
+    for (const auto &d : {c.presetsDir, c.modelsDir, c.irsDir})
+      d.createDirectory();
     return c;
   }
 

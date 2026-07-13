@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """GatewayPi web upload page.
 
-Serves a phone-friendly page on port 8080 for pushing .nam models and IR
-.wav files into the GatewayPi library over the local network.  Standard
-library only — no dependencies to install.
+Serves a phone-friendly page on port 8080 for pushing .nam captures and IR
+.wav files into the GatewayPi library over the local network.  Supports
+single files and whole folders (with subfolders).  Standard library only.
 """
 
 import email.parser
@@ -14,10 +14,27 @@ import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 DATA = os.environ.get("GATEWAYPI_DATA", "/var/lib/gatewaypi")
-MODELS = os.path.join(DATA, "models")
-IRS = os.path.join(DATA, "irs")
+
+
+def _resolve_dirs():
+    """Captures/IR folders: config.json first, then env, then home defaults."""
+    home = os.path.expanduser("~")
+    captures = os.path.join(home, "Captures")
+    irs = os.path.join(home, "IRs")
+    cfg_path = os.path.join(DATA, "config.json")
+    try:
+        cfg = json.load(open(cfg_path))
+        captures = cfg.get("capturesDir", captures)
+        irs = cfg.get("irsDir", irs)
+    except Exception:
+        pass
+    return (os.environ.get("GATEWAYPI_CAPTURES", captures),
+            os.environ.get("GATEWAYPI_IRS", irs))
+
+
+MODELS, IRS = _resolve_dirs()
 PORT = 8080
-MAX_UPLOAD = 200 * 1024 * 1024  # generous — sticks of IR packs are big
+MAX_UPLOAD = 500 * 1024 * 1024  # IR packs and capture folders can be large
 
 PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -25,35 +42,49 @@ PAGE = """<!DOCTYPE html>
 <title>GatewayPi</title>
 <style>
  body {{ font-family: system-ui, sans-serif; background:#17181a; color:#e9e6df;
-        max-width: 480px; margin: 0 auto; padding: 1rem; }}
+        max-width: 520px; margin: 0 auto; padding: 1rem; }}
  h1 {{ color:#e29a3a; font-size:1.4rem; }}
  form {{ background:#1f2124; padding:1rem; border-radius:8px; margin:1rem 0; }}
- input[type=file] {{ width:100%; margin:.5rem 0; }}
+ label {{ display:block; font-weight:700; margin:.3rem 0; }}
+ input[type=file] {{ width:100%; margin:.5rem 0; color:#e9e6df; }}
  button {{ background:#e29a3a; color:#17181a; border:0; padding:.7rem 1.4rem;
           border-radius:6px; font-weight:700; font-size:1rem; }}
- ul {{ font-size:.85rem; color:#a3a19a; }}
+ ul {{ font-size:.85rem; color:#a3a19a; max-height:9rem; overflow:auto;
+       background:#141517; border-radius:6px; padding:.5rem 1.2rem; }}
  .msg {{ background:#2a3d2e; padding:.6rem 1rem; border-radius:6px; }}
+ small {{ color:#8a877f; }}
 </style></head><body>
 <h1>GatewayPi library</h1>
 {msg}
 <form method="post" enctype="multipart/form-data" action="/upload">
-  <strong>Add files</strong><br>
-  <small>.nam &rarr; models &nbsp;&middot;&nbsp; .wav &rarr; IRs</small><br>
+  <label>Add files &nbsp;<small>.nam &rarr; Captures &middot; .wav &rarr; IRs</small></label>
   <input type="file" name="files" multiple accept=".nam,.wav">
+  <label>...or a whole folder <small>(subfolders kept)</small></label>
+  <input type="file" name="files" multiple webkitdirectory directory>
   <button type="submit">Upload</button>
 </form>
-<strong>Models ({nmodels})</strong><ul>{models}</ul>
+<strong>Captures ({nmodels})</strong><ul>{models}</ul>
 <strong>IRs ({nirs})</strong><ul>{irs}</ul>
 </body></html>"""
 
 
 def listing(path):
-    try:
-        names = sorted(os.listdir(path))
-    except OSError:
-        names = []
-    items = "".join(f"<li>{html.escape(n)}</li>" for n in names[:200])
-    return len(names), items
+    found = []
+    for root, _dirs, files in os.walk(path):
+        for n in files:
+            if n.lower().endswith((".nam", ".wav")):
+                rel = os.path.relpath(os.path.join(root, n), path)
+                found.append(rel)
+    found.sort()
+    items = "".join(f"<li>{html.escape(n)}</li>" for n in found[:300])
+    return len(found), items
+
+
+def safe_relpath(name):
+    """Keep subfolders from webkitRelativePath, but never escape the target."""
+    name = name.replace("\\", "/")
+    parts = [p for p in name.split("/") if p not in ("", ".", "..")]
+    return os.path.join(*parts) if parts else ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -95,27 +126,31 @@ class Handler(BaseHTTPRequestHandler):
             filename = part.get_filename()
             if not filename:
                 continue
-            # Never trust a client-supplied path.
-            filename = os.path.basename(filename)
-            payload = part.get_payload(decode=True) or b""
-            lower = filename.lower()
-            if lower.endswith(".nam"):
-                dest = os.path.join(MODELS, filename)
-            elif lower.endswith(".wav"):
-                dest = os.path.join(IRS, filename)
-            else:
-                skipped.append(filename)
+            rel = safe_relpath(filename)
+            if not rel:
                 continue
+            payload = part.get_payload(decode=True) or b""
+            lower = rel.lower()
+            if lower.endswith(".nam"):
+                dest = os.path.join(MODELS, rel)
+            elif lower.endswith(".wav"):
+                dest = os.path.join(IRS, rel)
+            else:
+                skipped.append(os.path.basename(rel))
+                continue
+            os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
             with open(dest, "wb") as f:
                 f.write(payload)
-            saved.append(filename)
+            saved.append(rel)
 
         parts = []
         if saved:
-            parts.append("Uploaded: " + ", ".join(html.escape(n) for n in saved))
+            parts.append(f"Uploaded {len(saved)}: "
+                         + ", ".join(html.escape(n) for n in saved[:20])
+                         + (" ..." if len(saved) > 20 else ""))
         if skipped:
             parts.append("Skipped (not .nam/.wav): "
-                         + ", ".join(html.escape(n) for n in skipped))
+                         + ", ".join(html.escape(n) for n in skipped[:10]))
         msg = f'<div class="msg">{" &middot; ".join(parts) or "No files received"}</div>'
         self._page(msg)
 

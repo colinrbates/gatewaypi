@@ -63,9 +63,15 @@ installer is idempotent — safe to re-run after changing anything.
 | B hold | CC 82 | Bypass (dry through) |
 | C hold | CC 83 | Tuner (mutes output, overlay on screen) |
 
-- **Add models/IRs**: browse to `http://<hostname>.local:8080` from your
-  phone and upload TONE3000 downloads, or plug in a USB stick (`.nam` files
-  anywhere; IR `.wav`s in a folder named `GatewayPi` or containing `IR`).
+- **Add captures/IRs**: browse to `http://<hostname>.local:8080` (or the
+  Pi's IP, `:8080`) from your phone/Mac and upload TONE3000 downloads —
+  single files *or* whole folders (subfolders are preserved). Or plug in a
+  USB stick (`.nam` files anywhere; IR `.wav`s in a folder named `GatewayPi`
+  or containing `IR`). Files land in `~/Captures` and `~/IRs` — plain folders
+  in your home directory, next to `Desktop`, so you can also manage them in
+  the file manager or over SSH/SFTP.
+- **AUDIO button**: in-window panel to pick the interface, buffer size and
+  sample rate, with a live readout of input/output channels and latency.
 - **Bluetooth pedal**: `sudo /opt/gatewaypi/bin/ble-pair.sh` once; it
   auto-reconnects from then on. USB needs nothing.
 
@@ -95,8 +101,12 @@ Presets are plain JSON in `/var/lib/gatewaypi/presets/`, named `NN-name.json`
 ## Troubleshooting
 
 - **Logs**: `journalctl -u gatewaypi-kiosk -f`
-- **No audio / wrong device**: tap AUDIO on-screen, or set
-  `audioDeviceMatch` to a substring of the name shown there.
+- **No audio / wrong device**: tap AUDIO on-screen and pick your interface;
+  the panel shows whether the input is live. Or set `audioDeviceMatch` in
+  config.json to a substring of the interface name.
+- **No input signal**: the installer masks PipeWire/PulseAudio so they can't
+  grab the USB interface; if you re-enabled desktop audio, the amp and the
+  desktop will fight over the device.
 - **Crackles/xruns**: raise `bufferSize` to 256; check the interface is on a
   USB 3 port by itself; confirm `threadirqs` is in `/boot/firmware/cmdline.txt`.
 - **Boots to the Raspberry Pi desktop instead of the amp**: you're on a

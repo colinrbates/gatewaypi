@@ -9,6 +9,8 @@
 
 #include "KioskShell.h"
 
+#include <cstdio>
+
 #if JucePlugin_Build_Standalone
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
@@ -227,6 +229,12 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
       mConfig(Config::load()),
       mPresets(std::make_shared<PresetManager>(proc, mConfig)),
       mBar(*mPresets), mTuner(proc, mConfig.tunerReference) {
+  // Route JUCE's internal logging (incl. ALSA device diagnostics) to a file
+  // so device negotiation is visible over ssh.
+  if (juce::Logger::getCurrentLogger() == nullptr)
+    juce::Logger::setCurrentLogger(juce::FileLogger::createDefaultAppLogger(
+        "GatewayPi", "juce.log", "GatewayPi JUCE log"));
+
   mPresets->onChanged = [this] { refresh(); };
   mBar.onOpenAudioSettings = [this] { openAudioSettings(); };
   mBar.onOpenMidiLearn = [this] { openMidiLearn(); };
@@ -285,6 +293,10 @@ void KioskShell::recreateInnerEditor() {
   mTuner.toFront(false); // overlays always cover the panel when visible
   if (mLearnOverlay != nullptr)
     mLearnOverlay->toFront(false);
+  if (mAudioPanel != nullptr)
+    mAudioPanel->toFront(false);
+  if (mConfirm != nullptr)
+    mConfirm->toFront(false);
   resized();
 }
 
@@ -297,6 +309,10 @@ void KioskShell::resized() {
   mTuner.setBounds(area);
   if (mLearnOverlay != nullptr)
     mLearnOverlay->setBounds(area);
+  if (mAudioPanel != nullptr)
+    mAudioPanel->setBounds(area);
+  if (mConfirm != nullptr)
+    mConfirm->setBounds(area);
 
   if (mInner == nullptr)
     return;
@@ -317,62 +333,137 @@ void KioskShell::resized() {
 
 void KioskShell::timerCallback() { configureAudioDevice(); }
 
+// Trace to stderr (journald / the service log) directly — bypasses any
+// Logger indirection so field debugging over ssh always has eyes.
+static void gpTrace(const juce::String &msg) {
+  std::fprintf(stderr, "GatewayPi: %s\n", msg.toRawUTF8());
+  std::fflush(stderr);
+}
+
+#if JucePlugin_Build_Standalone
+
+// Hardware, full-duplex devices only: names present in BOTH the input and
+// output lists, excluding the PulseAudio/JACK/resampler pseudo-devices.
+juce::StringArray gpListDuplexDevices() {
+  juce::StringArray out;
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  if (holder == nullptr)
+    return out;
+  for (auto *type : holder->deviceManager.getAvailableDeviceTypes()) {
+    type->scanForDevices();
+    const auto ins = type->getDeviceNames(true);
+    const auto outs = type->getDeviceNames(false);
+    for (const auto &in : ins) {
+      if (!outs.contains(in))
+        continue;
+      if (in.containsIgnoreCase("pulse") || in.containsIgnoreCase("jack") ||
+          in.containsIgnoreCase("converter") || in.containsIgnoreCase("plugin") ||
+          in.containsIgnoreCase("default") || in.containsIgnoreCase("dmix") ||
+          in.containsIgnoreCase("upmix") || in.containsIgnoreCase("downmix") ||
+          in.containsIgnoreCase("surround"))
+        continue;
+      out.addIfNotAlreadyThere(in);
+    }
+  }
+  return out;
+}
+
+// Open a device whose name contains `deviceNameContains` for full-duplex use
+// and return the number of live input channels (0 = input failed).  Iterates
+// exact input-list names so the ALSA input id is never empty, and verifies by
+// reading back the opened device — the failure mode that dogged the iTwo was
+// JUCE opening output-only with a mismatched input name.
+int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
+                    int bufferSize) {
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  if (holder == nullptr || deviceNameContains.isEmpty())
+    return 0;
+  holder->shouldMuteInput.setValue(false); // this is a guitar amp
+  auto &dm = holder->deviceManager;
+
+  for (auto *type : dm.getAvailableDeviceTypes()) {
+    type->scanForDevices();
+    const auto ins = type->getDeviceNames(true);
+    const auto outs = type->getDeviceNames(false);
+    for (const auto &in : ins) {
+      if (!in.containsIgnoreCase(deviceNameContains))
+        continue;
+      juce::String out = outs.contains(in) ? in : juce::String();
+      if (out.isEmpty())
+        for (const auto &o : outs)
+          if (o.containsIgnoreCase(deviceNameContains)) {
+            out = o;
+            break;
+          }
+
+      dm.setCurrentAudioDeviceType(type->getTypeName(), true);
+      auto setup = dm.getAudioDeviceSetup();
+      setup.inputDeviceName = in;   // exact string from the input list
+      setup.outputDeviceName = out;
+      setup.sampleRate = sampleRate;
+      setup.bufferSize = bufferSize;
+      setup.useDefaultInputChannels = false;
+      setup.inputChannels.clear();
+      setup.inputChannels.setRange(0, 2, true);
+      setup.useDefaultOutputChannels = false;
+      setup.outputChannels.clear();
+      setup.outputChannels.setRange(0, 2, true);
+
+      const auto err = dm.setAudioDeviceSetup(setup, true);
+      auto *dev = dm.getCurrentAudioDevice();
+      const int liveIn =
+          dev ? dev->getActiveInputChannels().countNumberOfSetBits() : 0;
+      const int liveOut =
+          dev ? dev->getActiveOutputChannels().countNumberOfSetBits() : 0;
+      gpTrace("try type=" + type->getTypeName() + " in=\"" + in + "\" out=\"" +
+              out + "\" err=\"" + err + "\" liveIn=" + juce::String(liveIn) +
+              " liveOut=" + juce::String(liveOut));
+      if (err.isEmpty() && liveIn > 0)
+        return liveIn;
+    }
+  }
+  return 0;
+}
+
+#endif // JucePlugin_Build_Standalone
+
 void KioskShell::configureAudioDevice() {
 #if JucePlugin_Build_Standalone
   auto *holder = juce::StandalonePluginHolder::getInstance();
   if (holder == nullptr)
     return;
-
-  // JUCE standalones default to muting the audio input as feedback
-  // protection.  This is a guitar amp: the input IS the instrument.
   holder->shouldMuteInput.setValue(false);
+
+  static bool announced = false;
+  if (!announced) {
+    announced = true;
+    gpTrace("watchdog live; deviceMatch=\"" + mConfig.audioDeviceMatch +
+            "\" duplexDevices=[" + gpListDuplexDevices().joinIntoString(" | ") +
+            "]");
+  }
 
   if (mAudioDeviceConfigured || mConfig.audioDeviceMatch.isEmpty())
     return;
 
-  auto &dm = holder->deviceManager;
-  auto setup = dm.getAudioDeviceSetup();
-
-  // Configured only counts if the names match AND the input is actually
-  // live — a matching device with zero active input channels is still a
-  // silent amp (this happens when the interface was plugged in after the
-  // app scanned, or the saved setup lost its input).
-  auto *current = dm.getCurrentAudioDevice();
-  const bool inputLive =
-      current != nullptr && !current->getActiveInputChannels().isZero();
-  if (inputLive &&
-      setup.inputDeviceName.containsIgnoreCase(mConfig.audioDeviceMatch) &&
-      setup.outputDeviceName.containsIgnoreCase(mConfig.audioDeviceMatch)) {
+  auto *current = holder->deviceManager.getCurrentAudioDevice();
+  if (current != nullptr && !current->getActiveInputChannels().isZero() &&
+      current->getName().containsIgnoreCase(mConfig.audioDeviceMatch)) {
+    gpTrace("device OK: " + current->getName());
     mAudioDeviceConfigured = true;
     return;
   }
 
-  // Look for a device matching the configured name on any device type.
-  for (auto *type : dm.getAvailableDeviceTypes()) {
-    type->scanForDevices();
-    for (const auto &name : type->getDeviceNames(false)) { // outputs
-      if (!name.containsIgnoreCase(mConfig.audioDeviceMatch))
-        continue;
-      dm.setCurrentAudioDeviceType(type->getTypeName(), true);
-      setup = dm.getAudioDeviceSetup();
-      setup.outputDeviceName = name;
-      // Prefer the matching input with the same name; else leave as-is.
-      for (const auto &inName : type->getDeviceNames(true))
-        if (inName.containsIgnoreCase(mConfig.audioDeviceMatch))
-          setup.inputDeviceName = inName;
-      setup.sampleRate = mConfig.sampleRate;
-      setup.bufferSize = mConfig.bufferSize;
-      setup.useDefaultInputChannels = true;
-      setup.useDefaultOutputChannels = true;
-      const auto err = dm.setAudioDeviceSetup(setup, true);
-      if (err.isEmpty()) {
-        juce::Logger::writeToLog("GatewayPi: audio device set to " + name);
-        mAudioDeviceConfigured = true;
-      } else {
-        juce::Logger::writeToLog("GatewayPi: audio device error: " + err);
-      }
-      return;
-    }
+  if (++mConfigureAttempts > 15) {
+    gpTrace("giving up on auto audio config; use the AUDIO button");
+    mAudioDeviceConfigured = true;
+    return;
+  }
+
+  const int liveIn = gpTryOpenDevice(mConfig.audioDeviceMatch,
+                                     mConfig.sampleRate, mConfig.bufferSize);
+  if (liveIn > 0) {
+    gpTrace("input live (" + juce::String(liveIn) + " ch)");
+    mAudioDeviceConfigured = true;
   }
 #endif
 }
@@ -393,28 +484,262 @@ void KioskShell::openMidiLearn() {
 
 void KioskShell::openAudioSettings() {
 #if JucePlugin_Build_Standalone
-  if (auto *holder = juce::StandalonePluginHolder::getInstance()) {
-    // Re-arm the watchdog off: the user is taking manual control.
-    mAudioDeviceConfigured = true;
-    holder->showAudioSettingsDialog();
+  // The user is taking manual control — stop the watchdog fighting them.
+  mAudioDeviceConfigured = true;
+  if (mAudioPanel == nullptr) {
+    mAudioPanel = std::make_unique<AudioPanel>(mConfig);
+    mAudioPanel->onClose = [this] { mAudioPanel->setVisible(false); };
+    addChildComponent(*mAudioPanel);
   }
+  mAudioPanel->refreshDevices();
+  mAudioPanel->setVisible(true);
+  mAudioPanel->toFront(false);
+  resized();
 #endif
 }
 
 void KioskShell::requestShutdown() {
-  auto opts = juce::MessageBoxOptions()
-                  .withIconType(juce::MessageBoxIconType::QuestionIcon)
-                  .withTitle("Power off?")
-                  .withMessage("Shut down the amp safely?")
-                  .withButton("Power off")
-                  .withButton("Cancel");
-  juce::AlertWindow::showAsync(opts, [](int result) {
-    if (result == 1) { // first button
-      juce::ChildProcess p;
-      // Requires the sudoers rule installed by install.sh.
+  if (mConfirm == nullptr) {
+    mConfirm = std::make_unique<ConfirmOverlay>("Power off the amp?", "POWER OFF");
+    mConfirm->onCancel = [this] { mConfirm->setVisible(false); };
+    mConfirm->onYes = [this] {
+      mConfirm->setVisible(false);
+      juce::ChildProcess p; // needs the sudoers rule from install.sh
       p.start("sudo -n /usr/bin/systemctl poweroff");
+    };
+    addChildComponent(*mConfirm);
+  }
+  mConfirm->setVisible(true);
+  mConfirm->toFront(false);
+  resized();
+}
+
+// ---------------------------------------------------------------------------
+// ConfirmOverlay
+// ---------------------------------------------------------------------------
+
+ConfirmOverlay::ConfirmOverlay(const juce::String &title,
+                               const juce::String &yesLabel)
+    : mTitle(title), mYes(yesLabel) {
+  mYes.setColour(juce::TextButton::buttonColourId, colours::warn);
+  mYes.setColour(juce::TextButton::textColourOffId, colours::text);
+  mYes.onClick = [this] {
+    if (onYes)
+      onYes();
+  };
+  mCancel.setColour(juce::TextButton::buttonColourId, colours::idle);
+  mCancel.setColour(juce::TextButton::textColourOffId, colours::text);
+  mCancel.onClick = [this] {
+    if (onCancel)
+      onCancel();
+  };
+  addAndMakeVisible(mYes);
+  addAndMakeVisible(mCancel);
+}
+
+void ConfirmOverlay::paint(juce::Graphics &g) {
+  g.fillAll(juce::Colour(0xf2141517));
+  g.setColour(colours::text);
+  g.setFont(juce::FontOptions((float)getHeight() * 0.08f, juce::Font::bold));
+  g.drawText(mTitle, getLocalBounds().removeFromTop(getHeight() / 2),
+             juce::Justification::centred);
+}
+
+void ConfirmOverlay::resized() {
+  auto area = getLocalBounds().reduced(getWidth() / 8);
+  auto row = area.removeFromBottom(juce::jmax(64, area.getHeight() / 3));
+  const int gap = 16;
+  const int w = (row.getWidth() - gap) / 2;
+  mCancel.setBounds(row.removeFromLeft(w));
+  mYes.setBounds(row.removeFromRight(w));
+}
+
+// ---------------------------------------------------------------------------
+// AudioPanel
+// ---------------------------------------------------------------------------
+
+AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
+  mTitle.setText("Audio", juce::dontSendNotification);
+  mTitle.setJustificationType(juce::Justification::centred);
+  mTitle.setColour(juce::Label::textColourId, colours::active);
+  addAndMakeVisible(mTitle);
+
+  mStatus.setJustificationType(juce::Justification::centred);
+  mStatus.setColour(juce::Label::textColourId, colours::text);
+  addAndMakeVisible(mStatus);
+
+  for (auto *hdr : {&mDeviceHeader, &mBufHeader, &mRateHeader})
+    hdr->setColour(juce::Label::textColourId, colours::text);
+  mDeviceHeader.setText("Interface", juce::dontSendNotification);
+  mBufHeader.setText("Buffer (latency)", juce::dontSendNotification);
+  mRateHeader.setText("Sample rate", juce::dontSendNotification);
+  addAndMakeVisible(mDeviceHeader);
+  addAndMakeVisible(mBufHeader);
+  addAndMakeVisible(mRateHeader);
+
+  const char *bufLabels[] = {"64", "128", "256"};
+  for (size_t i = 0; i < mBufButtons.size(); ++i) {
+    auto &b = mBufButtons[i];
+    b.setButtonText(bufLabels[i]);
+    b.setColour(juce::TextButton::buttonColourId, colours::idle);
+    b.setColour(juce::TextButton::buttonOnColourId, colours::active);
+    b.setColour(juce::TextButton::textColourOffId, colours::text);
+    b.setColour(juce::TextButton::textColourOnId, colours::bg);
+    b.setClickingTogglesState(false);
+    b.onClick = [this] { applyRateBuffer(); };
+    addAndMakeVisible(b);
+  }
+  const char *rateLabels[] = {"44100", "48000"};
+  for (size_t i = 0; i < mRateButtons.size(); ++i) {
+    auto &b = mRateButtons[i];
+    b.setButtonText(rateLabels[i]);
+    b.setColour(juce::TextButton::buttonColourId, colours::idle);
+    b.setColour(juce::TextButton::buttonOnColourId, colours::active);
+    b.setColour(juce::TextButton::textColourOffId, colours::text);
+    b.setColour(juce::TextButton::textColourOnId, colours::bg);
+    b.setClickingTogglesState(false);
+    b.onClick = [this] { applyRateBuffer(); };
+    addAndMakeVisible(b);
+  }
+  mClose.setColour(juce::TextButton::buttonColourId, colours::active);
+  mClose.setColour(juce::TextButton::textColourOffId, colours::bg);
+  mClose.onClick = [this] {
+    if (onClose)
+      onClose();
+  };
+  addAndMakeVisible(mClose);
+
+  refreshDevices();
+  startTimerHz(2); // keep the status line honest
+}
+
+void AudioPanel::rebuildDeviceButtons() {
+#if JucePlugin_Build_Standalone
+  mDeviceButtons.clear();
+  for (const auto &name : gpListDuplexDevices()) {
+    auto *b = new juce::TextButton(name);
+    b->setColour(juce::TextButton::buttonColourId, colours::idle);
+    b->setColour(juce::TextButton::buttonOnColourId, colours::active);
+    b->setColour(juce::TextButton::textColourOffId, colours::text);
+    b->setColour(juce::TextButton::textColourOnId, colours::bg);
+    b->onClick = [this, name] { openDevice(name); };
+    addAndMakeVisible(b);
+    mDeviceButtons.add(b);
+  }
+  resized();
+#endif
+}
+
+void AudioPanel::refreshDevices() { rebuildDeviceButtons(); }
+
+void AudioPanel::openDevice(const juce::String &name) {
+#if JucePlugin_Build_Standalone
+  mSelectedName = name;
+  const int buf = mConfig.bufferSize;
+  const int liveIn = gpTryOpenDevice(name, mConfig.sampleRate, buf);
+  gpTrace("panel openDevice \"" + name + "\" -> liveIn=" + juce::String(liveIn));
+  timerCallback();
+#endif
+}
+
+void AudioPanel::applyRateBuffer() {
+#if JucePlugin_Build_Standalone
+  // Read the chosen toggles and re-open the current device with them.
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  if (holder == nullptr)
+    return;
+  auto *dev = holder->deviceManager.getCurrentAudioDevice();
+  juce::String name = mSelectedName.isNotEmpty()
+                          ? mSelectedName
+                          : (dev ? dev->getName() : juce::String());
+  if (name.isEmpty())
+    return;
+  int buf = 128;
+  for (auto &b : mBufButtons)
+    if (b.getToggleState())
+      buf = b.getButtonText().getIntValue();
+  double rate = 48000.0;
+  for (auto &b : mRateButtons)
+    if (b.getToggleState())
+      rate = b.getButtonText().getDoubleValue();
+  gpTryOpenDevice(name, rate, buf);
+  timerCallback();
+#endif
+}
+
+void AudioPanel::timerCallback() {
+#if JucePlugin_Build_Standalone
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  auto *dev = holder ? holder->deviceManager.getCurrentAudioDevice() : nullptr;
+  if (dev == nullptr) {
+    mStatus.setText("No device open", juce::dontSendNotification);
+    return;
+  }
+  const int in = dev->getActiveInputChannels().countNumberOfSetBits();
+  const int out = dev->getActiveOutputChannels().countNumberOfSetBits();
+  const int buf = dev->getCurrentBufferSizeSamples();
+  const double sr = dev->getCurrentSampleRate();
+  const float latency = sr > 0 ? (float)buf / (float)sr * 1000.0f : 0.0f;
+  mStatus.setText(dev->getName() + juce::String::fromUTF8("  \xe2\x80\x94  in ") +
+                      juce::String(in) + " / out " + juce::String(out) + "  " +
+                      juce::String(sr / 1000.0, 1) + "kHz  " + juce::String(buf) +
+                      " smp (" + juce::String(latency, 1) + " ms" +
+                      (in > 0 ? ")" : ") — NO INPUT"),
+                  juce::dontSendNotification);
+
+  for (auto &b : mBufButtons)
+    b.setToggleState(b.getButtonText().getIntValue() == buf,
+                     juce::dontSendNotification);
+  for (auto &b : mRateButtons)
+    b.setToggleState((double)b.getButtonText().getIntValue() == sr,
+                     juce::dontSendNotification);
+  for (auto *b : mDeviceButtons)
+    b->setToggleState(dev->getName().containsIgnoreCase(b->getButtonText()) ||
+                          b->getButtonText().containsIgnoreCase(dev->getName()),
+                      juce::dontSendNotification);
+#endif
+}
+
+void AudioPanel::paint(juce::Graphics &g) { g.fillAll(juce::Colour(0xf2141517)); }
+
+void AudioPanel::resized() {
+  auto area = getLocalBounds().reduced(juce::jmax(12, getWidth() / 20));
+  const int line = juce::jmax(28, getHeight() / 16);
+  const int gap = 8;
+  mTitle.setBounds(area.removeFromTop(line));
+  mStatus.setBounds(area.removeFromTop(line));
+  area.removeFromTop(gap);
+
+  mClose.setBounds(area.removeFromBottom(juce::jmax(48, line * 2)));
+  area.removeFromBottom(gap);
+
+  mDeviceHeader.setBounds(area.removeFromTop(line));
+  for (auto *b : mDeviceButtons) {
+    b->setBounds(area.removeFromTop(juce::jmax(40, line + 12)));
+    area.removeFromTop(4);
+  }
+  area.removeFromTop(gap);
+
+  mBufHeader.setBounds(area.removeFromTop(line));
+  {
+    auto row = area.removeFromTop(juce::jmax(44, line + 14));
+    const int w = (row.getWidth() - gap * 2) / 3;
+    for (auto &b : mBufButtons) {
+      b.setBounds(row.removeFromLeft(w));
+      row.removeFromLeft(gap);
     }
-  });
+  }
+  area.removeFromTop(gap);
+
+  mRateHeader.setBounds(area.removeFromTop(line));
+  {
+    auto row = area.removeFromTop(juce::jmax(44, line + 14));
+    const int w = (row.getWidth() - gap) / 2;
+    for (auto &b : mRateButtons) {
+      b.setBounds(row.removeFromLeft(w));
+      row.removeFromLeft(gap);
+    }
+  }
 }
 
 } // namespace gatewaypi

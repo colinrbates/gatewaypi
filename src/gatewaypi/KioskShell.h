@@ -70,6 +70,56 @@ private:
   juce::TextButton mDone{"DONE"};
 };
 
+// A full-screen confirm overlay (child component, so touch works under the
+// cage kiosk — native AlertWindows do not get pointer input there).
+class ConfirmOverlay : public juce::Component {
+public:
+  ConfirmOverlay(const juce::String &title, const juce::String &yesLabel);
+  void resized() override;
+  void paint(juce::Graphics &g) override;
+  std::function<void()> onYes;
+  std::function<void()> onCancel;
+
+private:
+  juce::String mTitle;
+  juce::TextButton mYes, mCancel{"CANCEL"};
+};
+
+// In-window audio settings (child component — the native device dialog and
+// any ComboBox popup are separate windows that get no touch under cage, so
+// everything here is plain buttons).  Lets you pick the hardware interface,
+// buffer size and sample rate, and shows whether the input is actually live.
+class AudioPanel : public juce::Component, private juce::Timer {
+public:
+  explicit AudioPanel(const Config &config);
+  void resized() override;
+  void paint(juce::Graphics &g) override;
+  void refreshDevices();
+  std::function<void()> onClose;
+
+private:
+  void timerCallback() override;
+  void rebuildDeviceButtons();
+  void openDevice(const juce::String &name);
+  void applyRateBuffer();
+
+  const Config &mConfig;
+  juce::Label mTitle, mStatus;
+  juce::OwnedArray<juce::TextButton> mDeviceButtons;
+  juce::Label mDeviceHeader, mBufHeader, mRateHeader;
+  std::array<juce::TextButton, 3> mBufButtons;
+  std::array<juce::TextButton, 2> mRateButtons;
+  juce::TextButton mClose{"CLOSE"};
+  juce::String mSelectedName;
+};
+
+// Static, self-contained audio-device configuration used by both the
+// watchdog and the AudioPanel.  Returns the number of live input channels
+// after the attempt (0 = input failed).  Standalone builds only.
+int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
+                    int bufferSize);
+juce::StringArray gpListDuplexDevices();
+
 // The standalone appliance editor: PresetBar on top, the untouched
 // NAMix editor below (scaled to fill the touchscreen).  Owns the
 // PresetManager and MidiEngine, so foot control works for the lifetime of
@@ -98,6 +148,8 @@ private:
   PresetBar mBar;
   TunerOverlay mTuner;
   std::unique_ptr<MidiLearnOverlay> mLearnOverlay;
+  std::unique_ptr<AudioPanel> mAudioPanel;
+  std::unique_ptr<ConfirmOverlay> mConfirm;
   std::unique_ptr<NAMixAudioProcessorEditor> mInner;
 
   // Last-seen model/IR paths — the inner editor is rebuilt when these move
@@ -105,6 +157,7 @@ private:
   juce::String mLastModelPath, mLastIRPath;
 
   bool mAudioDeviceConfigured = false;
+  int mConfigureAttempts = 0;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(KioskShell)
 };
