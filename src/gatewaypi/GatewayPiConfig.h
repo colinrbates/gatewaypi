@@ -33,6 +33,7 @@ struct Config {
   juce::String audioDeviceMatch; // substring match for preferred ALSA device, e.g. "iTwo"
   double sampleRate = 48000.0;
   int bufferSize = 128;
+  double tunerReference = 440.0; // A4 reference pitch (Hz)
 
   static Config load() {
     Config c;
@@ -63,6 +64,8 @@ struct Config {
           c.audioDeviceMatch = obj->getProperty("audioDeviceMatch").toString();
         if (obj->hasProperty("sampleRate")) c.sampleRate = (double)obj->getProperty("sampleRate");
         if (obj->hasProperty("bufferSize")) c.bufferSize = (int)obj->getProperty("bufferSize");
+        if (obj->hasProperty("tunerReference"))
+          c.tunerReference = (double)obj->getProperty("tunerReference");
       }
     }
     return c;

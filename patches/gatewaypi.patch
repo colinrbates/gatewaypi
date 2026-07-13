@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d88f9d7..44c83f3 100644
+index d88f9d7..c5653da 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -122,16 +122,20 @@ target_include_directories(NAMixLinux PRIVATE
@@ -28,7 +28,7 @@ index d88f9d7..44c83f3 100644
      PUBLIC
          juce::juce_recommended_config_flags
          juce::juce_recommended_lto_flags
-@@ -147,3 +151,20 @@ target_compile_options(NAMixLinux PRIVATE
+@@ -147,3 +151,21 @@ target_compile_options(NAMixLinux PRIVATE
      -Wno-unused-parameter
      $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>
  )
@@ -43,6 +43,7 @@ index d88f9d7..44c83f3 100644
 +    target_sources(NAMixLinux PRIVATE
 +        src/gatewaypi/PresetManager.cpp
 +        src/gatewaypi/KioskShell.cpp
++        src/gatewaypi/Tuner.cpp
 +    )
 +    target_compile_definitions(NAMixLinux PUBLIC
 +        GATEWAYPI=1
@@ -70,7 +71,7 @@ index ac3d411..353d51c 100644
    // --- Knobs (labels use Roboto-Regular 17px = DEFAULT_TEXT_SIZE+3) ---
    setupKnob(mInputGainSlider, mInputGainLabel, "Input");
 diff --git a/src/PluginProcessor.cpp b/src/PluginProcessor.cpp
-index 8a795f9..99227e2 100644
+index 8a795f9..80e5cff 100644
 --- a/src/PluginProcessor.cpp
 +++ b/src/PluginProcessor.cpp
 @@ -13,6 +13,10 @@
@@ -84,10 +85,23 @@ index 8a795f9..99227e2 100644
  #include "NAM/get_dsp.h"
  
  // Compatibility shims required by the iPlug2-derived LanczosResampler that
-@@ -248,6 +252,31 @@ void NAMixAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
+@@ -248,6 +252,44 @@ void NAMixAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
    if (mIRPending.exchange(false))
      mIR = std::move(mPendingIR);
  
++  // GatewayPi: feed the tuner FIFO with raw input before anything else so
++  // tuning works precisely when the output is muted.
++  if (mGpTunerTap.load(std::memory_order_relaxed)) {
++    const float *in = buffer.getReadPointer(0);
++    int s1, b1, s2, b2;
++    mGpTunerFifo.prepareToWrite(buffer.getNumSamples(), s1, b1, s2, b2);
++    for (int i = 0; i < b1; ++i)
++      mGpTunerBuf[(size_t)(s1 + i)] = in[i];
++    for (int i = 0; i < b2; ++i)
++      mGpTunerBuf[(size_t)(s2 + i)] = in[b1 + i];
++    mGpTunerFifo.finishedWrite(b1 + b2);
++  }
++
 +  // GatewayPi: mute silences the output; bypass passes the dry input through.
 +  // Both skip the DSP chain entirely — the model refills its short context in
 +  // a few milliseconds when re-engaged.
@@ -116,7 +130,28 @@ index 8a795f9..99227e2 100644
    // Apply slim size update requested from the message thread.
    if (mSlimDirty.exchange(false, std::memory_order_acq_rel)) {
      const float v = apvts.getRawParameterValue("slim")->load();
-@@ -518,7 +547,11 @@ void NAMixAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
+@@ -471,6 +513,20 @@ void NAMixAudioProcessor::clearIR() {
+   mIRPending.store(true);
+ }
+ 
++// ---------------------------------------------------------------------------
++// GatewayPi tuner tap (message thread)
++// ---------------------------------------------------------------------------
++int NAMixAudioProcessor::gpReadTunerSamples(float *dest, int maxSamples) {
++  int s1, b1, s2, b2;
++  mGpTunerFifo.prepareToRead(maxSamples, s1, b1, s2, b2);
++  for (int i = 0; i < b1; ++i)
++    dest[i] = mGpTunerBuf[(size_t)(s1 + i)];
++  for (int i = 0; i < b2; ++i)
++    dest[b1 + i] = mGpTunerBuf[(size_t)(s2 + i)];
++  mGpTunerFifo.finishedRead(b1 + b2);
++  return b1 + b2;
++}
++
+ // ---------------------------------------------------------------------------
+ // Parameter listener
+ // ---------------------------------------------------------------------------
+@@ -518,7 +574,11 @@ void NAMixAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
  // Editor / plugin entry
  // ---------------------------------------------------------------------------
  juce::AudioProcessorEditor *NAMixAudioProcessor::createEditor() {
@@ -129,10 +164,10 @@ index 8a795f9..99227e2 100644
  
  juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {
 diff --git a/src/PluginProcessor.h b/src/PluginProcessor.h
-index 820444d..f1f0401 100644
+index 820444d..ac5eb21 100644
 --- a/src/PluginProcessor.h
 +++ b/src/PluginProcessor.h
-@@ -94,6 +94,14 @@ public:
+@@ -94,6 +94,19 @@ public:
  
    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
  
@@ -144,16 +179,27 @@ index 820444d..f1f0401 100644
 +  bool gpGetBypass() const { return mGpBypass.load(std::memory_order_relaxed); }
 +  bool gpGetMute() const { return mGpMute.load(std::memory_order_relaxed); }
 +
++  // Tuner tap: while enabled, the audio thread pushes raw input samples into
++  // a lock-free FIFO that the tuner UI drains on the message thread.
++  void gpSetTunerTap(bool on) { mGpTunerTap.store(on, std::memory_order_relaxed); }
++  int gpReadTunerSamples(float *dest, int maxSamples);
++
  private:
    void applyDsp(juce::AudioBuffer<float> &buffer);
  
-@@ -143,5 +151,9 @@ private:
+@@ -143,5 +156,15 @@ private:
    juce::String mModelPath;
    juce::String mIRPath;
  
 +  // GatewayPi appliance flags (see gpSetBypass/gpSetMute above).
 +  std::atomic<bool> mGpBypass{false};
 +  std::atomic<bool> mGpMute{false};
++
++  // GatewayPi tuner tap (see gpSetTunerTap/gpReadTunerSamples above).
++  static constexpr int kGpTunerFifoSize = 16384;
++  juce::AbstractFifo mGpTunerFifo{kGpTunerFifoSize};
++  std::vector<float> mGpTunerBuf = std::vector<float>(kGpTunerFifoSize, 0.0f);
++  std::atomic<bool> mGpTunerTap{false};
 +
    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NAMixAudioProcessor)
  };

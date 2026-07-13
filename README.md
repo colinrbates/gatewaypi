@@ -35,8 +35,10 @@ installer is idempotent — safe to re-run after changing anything.
 ## Using it
 
 - **Touchscreen** — the Gateway panel (model/IR pickers, gate, EQ, levels)
-  with a preset strip above it: 4 slots, bank arrows, BYP / MUTE / SAVE,
-  AUDIO (device picker) and OFF (safe shutdown).
+  with a preset strip above it: 4 slots, bank arrows, BYP / TUNE / SAVE,
+  AUDIO (device picker) and OFF (safe shutdown). TUNE mutes the output and
+  shows a chromatic tuner (McLeod pitch method, accurate to well under a
+  cent, down to a 5-string's low B).
 - **Dial in a tone**: pick a model + IR, tweak, hit **SAVE** — it lands in
   the selected slot.
 - **Footswitches** (program the Chocolate once in M-Vave's CubeSuite app):
@@ -47,7 +49,7 @@ installer is idempotent — safe to re-run after changing anything.
 | A hold | CC 80 | Bank down |
 | D hold | CC 81 | Bank up |
 | B hold | CC 82 | Bypass (dry through) |
-| C hold | CC 83 | Mute (silent tuning) |
+| C hold | CC 83 | Tuner (mutes output, overlay on screen) |
 
 - **Add models/IRs**: browse to `http://<hostname>.local:8080` from your
   phone and upload TONE3000 downloads, or plug in a USB stick (`.nam` files
@@ -66,6 +68,7 @@ installer is idempotent — safe to re-run after changing anything.
   "audioDeviceMatch": "iTwo",  // substring of your interface's ALSA name
   "sampleRate": 48000,
   "bufferSize": 128,           // try 64 once stable; 256 if you hear xruns
+  "tunerReference": 440,       // A4 reference pitch
   "bleMidiMac": ""             // set by ble-pair.sh
 }
 ```
@@ -101,9 +104,9 @@ freezes the whole filesystem including the library — disable it
 ```
 install.sh              one-command installer (idempotent)
 uninstall.sh            remover
-patches/gatewaypi.patch 73-line patch to upstream (hooks + kiosk editor)
+patches/gatewaypi.patch small patch to upstream (hooks, tuner tap, kiosk editor)
 src/gatewaypi/          appliance layer: PresetManager, MidiEngine,
-                        KioskShell + PresetBar, Config
+                        KioskShell + PresetBar, TunerEngine + overlay, Config
 system/                 systemd units, udev rule, RT limits, BLE scripts
 webui/upload_server.py  phone upload page (Python stdlib only)
 config/                 default config.json + 4 empty preset slots

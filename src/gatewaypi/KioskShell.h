@@ -19,6 +19,7 @@
 #include "PresetManager.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "Tuner.h"
 
 namespace gatewaypi {
 
@@ -41,7 +42,7 @@ private:
   std::array<juce::TextButton, kSlotsPerBank> mSlotButtons;
   juce::TextButton mBankDown{"<"}, mBankUp{">"};
   juce::Label mBankLabel;
-  juce::TextButton mBypass{"BYP"}, mMute{"MUTE"}, mSave{"SAVE"};
+  juce::TextButton mBypass{"BYP"}, mMute{"TUNE"}, mSave{"SAVE"};
   juce::TextButton mSettings{"AUDIO"}, mPower{"OFF"};
 };
 
@@ -70,6 +71,7 @@ private:
   std::shared_ptr<PresetManager> mPresets;
   std::unique_ptr<MidiEngine> mMidi;
   PresetBar mBar;
+  TunerOverlay mTuner;
   std::unique_ptr<NAMixAudioProcessorEditor> mInner;
 
   // Last-seen model/IR paths — the inner editor is rebuilt when these move

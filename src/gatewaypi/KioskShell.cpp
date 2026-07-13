@@ -129,11 +129,12 @@ KioskShell::KioskShell(NAMixAudioProcessor &proc)
     : juce::AudioProcessorEditor(proc), mProcessor(proc),
       mConfig(Config::load()),
       mPresets(std::make_shared<PresetManager>(proc, mConfig)),
-      mBar(*mPresets) {
+      mBar(*mPresets), mTuner(proc, mConfig.tunerReference) {
   mPresets->onChanged = [this] { refresh(); };
   mBar.onOpenAudioSettings = [this] { openAudioSettings(); };
   mBar.onShutdown = [this] { requestShutdown(); };
   addAndMakeVisible(mBar);
+  addChildComponent(mTuner);
 
   recreateInnerEditor();
 
@@ -166,6 +167,13 @@ void KioskShell::paint(juce::Graphics &g) { g.fillAll(colours::bg); }
 
 void KioskShell::refresh() {
   mBar.refresh();
+
+  // Mute doubles as silent tuning: the tap feeds the detector only while
+  // the overlay is up.
+  const bool tuning = mPresets->getMute();
+  mProcessor.gpSetTunerTap(tuning);
+  mTuner.setVisible(tuning);
+
   if (mProcessor.getModelPath() != mLastModelPath ||
       mProcessor.getIRPath() != mLastIRPath)
     recreateInnerEditor();
@@ -176,6 +184,7 @@ void KioskShell::recreateInnerEditor() {
   mLastModelPath = mProcessor.getModelPath();
   mLastIRPath = mProcessor.getIRPath();
   addAndMakeVisible(*mInner);
+  mTuner.toFront(false); // the overlay always covers the panel when visible
   resized();
 }
 
@@ -185,6 +194,7 @@ void KioskShell::resized() {
   const bool portrait = area.getHeight() > area.getWidth();
   const int barH = juce::jlimit(96, 176, area.getHeight() / (portrait ? 8 : 5));
   mBar.setBounds(area.removeFromTop(barH));
+  mTuner.setBounds(area);
 
   if (mInner == nullptr)
     return;
