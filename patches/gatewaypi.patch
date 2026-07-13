@@ -1,8 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d88f9d7..c5653da 100644
+index d88f9d7..a5b1832 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -122,16 +122,20 @@ target_include_directories(NAMixLinux PRIVATE
+@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
+ 
+ project(namix-linux VERSION 0.4.0 LANGUAGES CXX C)
+ 
++option(GATEWAYPI "Build the GatewayPi kiosk appliance layer" OFF)
++
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ set(CMAKE_CXX_EXTENSIONS OFF)
+@@ -122,19 +124,25 @@ target_include_directories(NAMixLinux PRIVATE
  # ---------------------------------------------------------------------------
  # Link libraries
  # ---------------------------------------------------------------------------
@@ -27,8 +36,14 @@ index d88f9d7..c5653da 100644
 -        stdc++fs
      PUBLIC
          juce::juce_recommended_config_flags
-         juce::juce_recommended_lto_flags
-@@ -147,3 +151,21 @@ target_compile_options(NAMixLinux PRIVATE
+-        juce::juce_recommended_lto_flags
++        # LTO's parallel link jobs exhaust a 4 GB Pi's RAM; skip it for the
++        # appliance build (the DSP hot path doesn't need it).
++        $<$<NOT:$<BOOL:${GATEWAYPI}>>:juce::juce_recommended_lto_flags>
+         juce::juce_recommended_warning_flags
+ )
+ 
+@@ -147,3 +155,21 @@ target_compile_options(NAMixLinux PRIVATE
      -Wno-unused-parameter
      $<$<VERSION_LESS:$<CXX_COMPILER_VERSION>,13>:-fpermissive>
  )
@@ -38,7 +53,6 @@ index d88f9d7..c5653da 100644
 +# Enable with -DGATEWAYPI=ON; requires src/gatewaypi/ to be present (copied
 +# in by the GatewayPi installer).
 +# ---------------------------------------------------------------------------
-+option(GATEWAYPI "Build the GatewayPi kiosk appliance layer" OFF)
 +if(GATEWAYPI)
 +    target_sources(NAMixLinux PRIVATE
 +        src/gatewaypi/PresetManager.cpp
@@ -50,6 +64,7 @@ index d88f9d7..c5653da 100644
 +        JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE=1
 +    )
 +endif()
++
 diff --git a/src/PluginEditor.cpp b/src/PluginEditor.cpp
 index ac3d411..353d51c 100644
 --- a/src/PluginEditor.cpp

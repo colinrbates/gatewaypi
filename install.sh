@@ -85,8 +85,35 @@ fi
 rm -rf src/gatewaypi
 cp -R "$BUNDLE_DIR/src/gatewaypi" src/
 
+# Parallelism vs RAM: each g++ job on this template-heavy code can take
+# well over 1 GB, and the OOM killer silently eats compiler processes
+# ("gmake: Error 2" with no error line).  Scale jobs to available memory.
+JOBS=$(nproc)
+MEM_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+if [ "$MEM_MB" -lt 3000 ]; then JOBS=1
+elif [ "$MEM_MB" -lt 6000 ]; then JOBS=2
+fi
+echo "    building with -j$JOBS (${MEM_MB} MB RAM)"
+
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGATEWAYPI=ON
-cmake --build build --target NAMixLinux_Standalone -j"$(nproc)"
+
+build_ok=0
+if cmake --build build --target NAMixLinux_Standalone -j"$JOBS" 2>&1 | tee build.log; then
+  build_ok=1
+elif grep -qiE "killed|out of memory" build.log; then
+  echo "    compiler was OOM-killed — retrying single-threaded"
+  if cmake --build build --target NAMixLinux_Standalone -j1 2>&1 | tee build.log; then
+    build_ok=1
+  fi
+fi
+if [ "$build_ok" -ne 1 ]; then
+  echo ""
+  echo "BUILD FAILED. First real errors from build.log:"
+  grep -m 8 -B 2 -A 6 " error: " build.log || tail -30 build.log
+  echo ""
+  echo "Full log: $SRC/build.log — please share it for debugging."
+  exit 1
+fi
 
 install -m 755 build/NAMixLinux_artefacts/Release/Standalone/NAMix "$BIN/gatewaypi"
 echo "    installed $BIN/gatewaypi"
