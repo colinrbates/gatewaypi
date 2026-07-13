@@ -33,7 +33,7 @@ struct Config {
   int ccMute = 83;
   juce::String audioDeviceMatch; // substring match for preferred ALSA device, e.g. "iTwo"
   double sampleRate = 48000.0; // NAM is optimised for 48 kHz; fixed.
-  int bufferSize = 64;
+  int bufferSize = 128;        // full-duplex USB needs headroom; 64 tends to xrun
   double tunerReference = 440.0; // A4 reference pitch (Hz)
   bool autosavePresets = true;   // persist tweaks to the active slot
   juce::var midiMap;             // learned bindings: {action: {type, number}}

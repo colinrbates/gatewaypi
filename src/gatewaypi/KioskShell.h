@@ -166,7 +166,7 @@ private:
 
   juce::String mSelectedName;
   int mInputMask = 1;         // bits 0/1 -> device capture channels (In 1 default)
-  int mBufSel = 64;
+  int mBufSel = 128;
   static constexpr double kRate = 48000.0; // NAM native; fixed
 };
 
