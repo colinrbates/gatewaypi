@@ -121,18 +121,22 @@ private:
 };
 
 // A full-screen confirm overlay (child component, so touch works under the
-// cage kiosk — native AlertWindows do not get pointer input there).
+// cage kiosk — native AlertWindows do not get pointer input there).  Offers
+// a primary action, an optional secondary action, and cancel.
 class ConfirmOverlay : public juce::Component {
 public:
-  ConfirmOverlay(const juce::String &title, const juce::String &yesLabel);
+  ConfirmOverlay(const juce::String &title, const juce::String &primaryLabel,
+                 const juce::String &secondaryLabel = juce::String());
   void resized() override;
   void paint(juce::Graphics &g) override;
-  std::function<void()> onYes;
+  std::function<void()> onPrimary;
+  std::function<void()> onSecondary;
   std::function<void()> onCancel;
 
 private:
   juce::String mTitle;
-  juce::TextButton mYes, mCancel{"CANCEL"};
+  bool mHasSecondary = false;
+  juce::TextButton mPrimary, mSecondary, mCancel{"CANCEL"};
 };
 
 // In-window audio settings (child component — the native device dialog and
@@ -196,6 +200,7 @@ private:
   void openMidiLearn();
   void openRename(int slot);
   void requestShutdown();
+  void hideOverlaysExcept(juce::Component *keep); // one overlay at a time
 
   NAMixAudioProcessor &mProcessor;
   Config mConfig;
@@ -214,6 +219,7 @@ private:
   juce::String mLastModelPath, mLastIRPath;
 
   bool mAudioDeviceConfigured = false;
+  bool mUserSetAudio = false; // user picked a device in the AUDIO panel
   int mConfigureAttempts = 0;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(KioskShell)

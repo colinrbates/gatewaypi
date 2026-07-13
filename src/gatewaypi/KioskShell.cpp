@@ -27,6 +27,7 @@ const juce::Colour bg{0xff17181a};
 const juce::Colour active{0xffe29a3a};   // tube amber
 const juce::Colour idle{0xff2a2c30};
 const juce::Colour warn{0xffb0413e};
+const juce::Colour signalBlue{0xff3f6273}; // cable/steel blue
 const juce::Colour text{0xffe9e6df};
 } // namespace colours
 
@@ -284,6 +285,8 @@ void KioskShell::refresh() {
   // the overlay is up.
   const bool tuning = mPresets->getMute();
   mProcessor.gpSetTunerTap(tuning);
+  if (tuning)
+    hideOverlaysExcept(&mTuner); // tuner takes over from any open panel
   mTuner.setVisible(tuning);
 
   if (mProcessor.getModelPath() != mLastModelPath ||
@@ -472,28 +475,36 @@ void KioskShell::configureAudioDevice() {
             "]");
   }
 
-  if (mAudioDeviceConfigured || mConfig.audioDeviceMatch.isEmpty())
+  if (mConfig.audioDeviceMatch.isEmpty())
     return;
 
+  // Already good? Nothing to do. (Checked every tick so we also notice the
+  // interface disappearing — e.g. a USB glitch — and re-open it.)
   auto *current = holder->deviceManager.getCurrentAudioDevice();
   if (current != nullptr && !current->getActiveInputChannels().isZero() &&
       current->getName().containsIgnoreCase(mConfig.audioDeviceMatch)) {
-    gpTrace("device OK: " + current->getName());
+    if (!mAudioDeviceConfigured)
+      gpTrace("device OK: " + current->getName());
     mAudioDeviceConfigured = true;
     return;
   }
 
-  if (++mConfigureAttempts > 15) {
-    gpTrace("giving up on auto audio config; use the AUDIO button");
-    mAudioDeviceConfigured = true;
+  // The user took manual control via the AUDIO panel — don't fight them.
+  if (mUserSetAudio)
     return;
-  }
 
+  // Never permanently give up: the interface may be plugged in after boot,
+  // or come back after a glitch. Keep trying, but only log occasionally.
+  mAudioDeviceConfigured = false;
+  const bool loud = (mConfigureAttempts++ % 10) == 0;
   const int liveIn = gpTryOpenDevice(mConfig.audioDeviceMatch,
                                      mConfig.sampleRate, mConfig.bufferSize);
   if (liveIn > 0) {
     gpTrace("input live (" + juce::String(liveIn) + " ch)");
     mAudioDeviceConfigured = true;
+  } else if (loud) {
+    gpTrace("waiting for interface matching \"" + mConfig.audioDeviceMatch +
+            "\"...");
   }
 #endif
 }
@@ -506,6 +517,7 @@ void KioskShell::openMidiLearn() {
     mLearnOverlay->onClose = [this] { mLearnOverlay->setVisible(false); };
     addChildComponent(*mLearnOverlay);
   }
+  hideOverlaysExcept(mLearnOverlay.get());
   mLearnOverlay->refreshBindings();
   mLearnOverlay->setVisible(true);
   mLearnOverlay->toFront(false);
@@ -515,12 +527,13 @@ void KioskShell::openMidiLearn() {
 void KioskShell::openAudioSettings() {
 #if JucePlugin_Build_Standalone
   // The user is taking manual control — stop the watchdog fighting them.
-  mAudioDeviceConfigured = true;
+  mUserSetAudio = true;
   if (mAudioPanel == nullptr) {
     mAudioPanel = std::make_unique<AudioPanel>(mConfig);
     mAudioPanel->onClose = [this] { mAudioPanel->setVisible(false); };
     addChildComponent(*mAudioPanel);
   }
+  hideOverlaysExcept(mAudioPanel.get());
   mAudioPanel->refreshDevices();
   mAudioPanel->setVisible(true);
   mAudioPanel->toFront(false);
@@ -542,6 +555,7 @@ void KioskShell::openRename(int slot) {
       mPresets->isSlotOccupied(slot) ? mPresets->getSlotName(slot) : juce::String();
   mKeyboard->setPrompt("Name preset " + juce::String(slot + 1),
                        cur == "-" ? juce::String() : cur);
+  hideOverlaysExcept(mKeyboard.get());
   mKeyboard->setVisible(true);
   mKeyboard->toFront(false);
   resized();
@@ -549,18 +563,39 @@ void KioskShell::openRename(int slot) {
 
 void KioskShell::requestShutdown() {
   if (mConfirm == nullptr) {
-    mConfirm = std::make_unique<ConfirmOverlay>("Power off the amp?", "POWER OFF");
+    mConfirm = std::make_unique<ConfirmOverlay>("Power", "POWER OFF", "REBOOT");
     mConfirm->onCancel = [this] { mConfirm->setVisible(false); };
-    mConfirm->onYes = [this] {
+    mConfirm->onPrimary = [this] {
       mConfirm->setVisible(false);
       juce::ChildProcess p; // needs the sudoers rule from install.sh
       p.start("sudo -n /usr/bin/systemctl poweroff");
     };
+    mConfirm->onSecondary = [this] {
+      mConfirm->setVisible(false);
+      juce::ChildProcess p;
+      p.start("sudo -n /usr/bin/systemctl reboot");
+    };
     addChildComponent(*mConfirm);
   }
+  hideOverlaysExcept(mConfirm.get());
   mConfirm->setVisible(true);
   mConfirm->toFront(false);
   resized();
+}
+
+// Only one overlay is up at a time — opening one dismisses the others (and
+// leaving the tuner requires unmuting, which the caller handles).
+void KioskShell::hideOverlaysExcept(juce::Component *keep) {
+  for (juce::Component *c : {(juce::Component *)mLearnOverlay.get(),
+                             (juce::Component *)mAudioPanel.get(),
+                             (juce::Component *)mConfirm.get(),
+                             (juce::Component *)mKeyboard.get(),
+                             (juce::Component *)&mTuner})
+    if (c != nullptr && c != keep && c->isVisible())
+      c->setVisible(false);
+  // The tuner is driven by the mute flag; clear it when leaving the tuner.
+  if (keep != &mTuner && mPresets->getMute())
+    mProcessor.gpSetMute(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,21 +603,32 @@ void KioskShell::requestShutdown() {
 // ---------------------------------------------------------------------------
 
 ConfirmOverlay::ConfirmOverlay(const juce::String &title,
-                               const juce::String &yesLabel)
-    : mTitle(title), mYes(yesLabel) {
-  mYes.setColour(juce::TextButton::buttonColourId, colours::warn);
-  mYes.setColour(juce::TextButton::textColourOffId, colours::text);
-  mYes.onClick = [this] {
-    if (onYes)
-      onYes();
+                               const juce::String &primaryLabel,
+                               const juce::String &secondaryLabel)
+    : mTitle(title), mPrimary(primaryLabel), mSecondary(secondaryLabel) {
+  mHasSecondary = secondaryLabel.isNotEmpty();
+  mPrimary.setColour(juce::TextButton::buttonColourId, colours::warn);
+  mPrimary.setColour(juce::TextButton::textColourOffId, colours::text);
+  mPrimary.onClick = [this] {
+    if (onPrimary)
+      onPrimary();
   };
+  addAndMakeVisible(mPrimary);
+  if (mHasSecondary) {
+    mSecondary.setColour(juce::TextButton::buttonColourId, colours::signalBlue);
+    mSecondary.setColour(juce::TextButton::textColourOffId, colours::text);
+    mSecondary.onClick = [this] {
+      if (onSecondary)
+        onSecondary();
+    };
+    addAndMakeVisible(mSecondary);
+  }
   mCancel.setColour(juce::TextButton::buttonColourId, colours::idle);
   mCancel.setColour(juce::TextButton::textColourOffId, colours::text);
   mCancel.onClick = [this] {
     if (onCancel)
       onCancel();
   };
-  addAndMakeVisible(mYes);
   addAndMakeVisible(mCancel);
 }
 
@@ -597,10 +643,16 @@ void ConfirmOverlay::paint(juce::Graphics &g) {
 void ConfirmOverlay::resized() {
   auto area = getLocalBounds().reduced(getWidth() / 8);
   auto row = area.removeFromBottom(juce::jmax(64, area.getHeight() / 3));
-  const int gap = 16;
-  const int w = (row.getWidth() - gap) / 2;
+  const int gap = 12;
+  const int n = mHasSecondary ? 3 : 2;
+  const int w = (row.getWidth() - gap * (n - 1)) / n;
   mCancel.setBounds(row.removeFromLeft(w));
-  mYes.setBounds(row.removeFromRight(w));
+  row.removeFromLeft(gap);
+  if (mHasSecondary) {
+    mSecondary.setBounds(row.removeFromLeft(w));
+    row.removeFromLeft(gap);
+  }
+  mPrimary.setBounds(row.removeFromLeft(w));
 }
 
 // ---------------------------------------------------------------------------

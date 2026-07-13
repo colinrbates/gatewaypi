@@ -43,6 +43,7 @@ public:
   int getBank() const { return mBank; }
   int getSlot() const { return mSlot; }
   int getNumBanks() const;
+  int numPopulatedBanks() const;
 
   // Display name for a slot of the current bank ("-" if empty).
   juce::String getSlotName(int slot) const;

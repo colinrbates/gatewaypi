@@ -45,13 +45,18 @@ juce::File PresetManager::slotFile(int bank, int slot) const {
       juce::String::formatted("%02d-preset.json", n));
 }
 
-int PresetManager::getNumBanks() const {
+int PresetManager::numPopulatedBanks() const {
   int maxPrefix = 0;
   for (const auto &f : mConfig.presetsDir.findChildFiles(juce::File::findFiles,
                                                          false, "*.json"))
     maxPrefix = juce::jmax(maxPrefix, prefixOf(f));
-  const int fromFiles = (maxPrefix + kSlotsPerBank - 1) / kSlotsPerBank;
-  return juce::jmax(1, fromFiles, mBank + 1);
+  return juce::jmax(1, (maxPrefix + kSlotsPerBank - 1) / kSlotsPerBank);
+}
+
+int PresetManager::getNumBanks() const {
+  // The populated banks, plus the empty one you may have stepped into to
+  // build a new bank (mBank can sit one past the last populated bank).
+  return juce::jmax(numPopulatedBanks(), mBank + 1);
 }
 
 bool PresetManager::isSlotOccupied(int slot) const {
@@ -72,7 +77,9 @@ juce::String PresetManager::getSlotName(int slot) const {
 
 void PresetManager::setBank(int bank) {
   maybeAutosave(); // the active slot still belongs to the old bank
-  mBank = juce::jlimit(0, juce::jmax(0, getNumBanks() - 1), bank);
+  // Allow stepping one bank past the populated ones: that fresh empty bank
+  // becomes real as soon as you SAVE a preset into it.
+  mBank = juce::jlimit(0, numPopulatedBanks(), bank);
   if (onChanged)
     onChanged();
 }

@@ -81,7 +81,7 @@ index d88f9d7..86b8f6d 100644
 +endif()
 +
 diff --git a/src/PluginEditor.cpp b/src/PluginEditor.cpp
-index ac3d411..191e2ab 100644
+index ac3d411..61d3656 100644
 --- a/src/PluginEditor.cpp
 +++ b/src/PluginEditor.cpp
 @@ -147,6 +147,7 @@ NAMixAudioProcessorEditor::NAMixAudioProcessorEditor(NAMixAudioProcessor &p)
@@ -100,7 +100,25 @@ index ac3d411..191e2ab 100644
  
    // --- Knobs (labels use Roboto-Regular 17px = DEFAULT_TEXT_SIZE+3) ---
    setupKnob(mInputGainSlider, mInputGainLabel, "Input");
-@@ -453,9 +455,15 @@ void NAMixAudioProcessorEditor::setupKnob(juce::Slider &slider, juce::Label &lab
+@@ -323,7 +325,16 @@ void NAMixAudioProcessorEditor::paint(juce::Graphics &g) {
+   // Title — Michroma-Regular 30px, white, centred in contentArea.GetFromTop(50)
+   g.setColour(juce::Colour(0xfff2f2f2));
+   g.setFont(mMichromaFont.withHeight(30.0f));
+-  g.drawText("NAMix", juce::Rectangle<int>(Layout::CL, Layout::CT, Layout::CW, 50),
++  juce::String title = "NAMix";
++#if GATEWAYPI
++  // Brand is configurable without a rebuild: set GATEWAYPI_BRAND in the
++  // service environment. Defaults to "GatewayPi".
++  title = "GatewayPi";
++  if (auto *b = std::getenv("GATEWAYPI_BRAND"))
++    if (*b != '\0')
++      title = juce::String::fromUTF8(b);
++#endif
++  g.drawText(title, juce::Rectangle<int>(Layout::CL, Layout::CT, Layout::CW, 50),
+              juce::Justification::centred);
+ 
+   // Gear icon — drawn in the settingsButtonArea corner (centred in 22×22)
+@@ -453,9 +464,15 @@ void NAMixAudioProcessorEditor::setupKnob(juce::Slider &slider, juce::Label &lab
  }
  
  void NAMixAudioProcessorEditor::chooseModelFile() {
@@ -118,7 +136,7 @@ index ac3d411..191e2ab 100644
  
    mFileChooser->launchAsync(
        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-@@ -472,9 +480,14 @@ void NAMixAudioProcessorEditor::chooseModelFile() {
+@@ -472,9 +489,14 @@ void NAMixAudioProcessorEditor::chooseModelFile() {
  }
  
  void NAMixAudioProcessorEditor::chooseIRFile() {

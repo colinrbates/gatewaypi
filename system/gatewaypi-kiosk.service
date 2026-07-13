@@ -14,6 +14,8 @@ StandardError=journal
 UtmpIdentifier=tty1
 UtmpMode=user
 Environment=GATEWAYPI_DATA=/var/lib/gatewaypi
+# The name shown on the amp panel. Change it to whatever you like.
+Environment=GATEWAYPI_BRAND=GatewayPi
 ExecStart=/usr/bin/cage -- /opt/gatewaypi/bin/gatewaypi
 Restart=always
 RestartSec=2
