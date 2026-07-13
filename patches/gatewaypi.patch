@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d88f9d7..86b8f6d 100644
+index d88f9d7..b4d0af5 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
@@ -20,7 +20,19 @@ index d88f9d7..86b8f6d 100644
  
  # ---------------------------------------------------------------------------
  # Embedded font resources (Michroma-Regular and Roboto-Regular, copied from
-@@ -122,19 +124,25 @@ target_include_directories(NAMixLinux PRIVATE
+@@ -107,6 +109,11 @@ target_compile_definitions(NAMixLinux
+         JUCE_USE_CURL=0
+         JUCE_VST3_CAN_REPLACE_VST2=0
+         NAM_ENABLE_A2_FAST
++        # Route audio through JACK (jackd owns the interface and handles
++        # full-duplex clocking). JUCE dlopens libjack at runtime, so no
++        # build-time link is needed — only the header/define.
++        JUCE_JACK=1
++        JUCE_ALSA=1
+ )
+ 
+ # NamDsp's PUBLIC include paths flow into NAMixLinux automatically via the
+@@ -122,19 +129,25 @@ target_include_directories(NAMixLinux PRIVATE
  # ---------------------------------------------------------------------------
  # Link libraries
  # ---------------------------------------------------------------------------
@@ -52,7 +64,7 @@ index d88f9d7..86b8f6d 100644
          juce::juce_recommended_warning_flags
  )
  
-@@ -143,7 +151,27 @@ target_link_libraries(NAMixLinux
+@@ -143,7 +156,27 @@ target_link_libraries(NAMixLinux
  # ---------------------------------------------------------------------------
  target_compile_options(NAMixLinux PRIVATE
      -ffast-math

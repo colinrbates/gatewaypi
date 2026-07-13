@@ -1,6 +1,7 @@
 [Unit]
 Description=GatewayPi kiosk (cage compositor running the GatewayPi amp app)
-After=systemd-user-sessions.service getty@tty1.service plymouth-quit-wait.service
+After=systemd-user-sessions.service getty@tty1.service plymouth-quit-wait.service gatewaypi-jack.service
+Wants=gatewaypi-jack.service
 Conflicts=getty@tty1.service
 
 [Service]

@@ -8,8 +8,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-systemctl disable --now gatewaypi-kiosk gatewaypi-tuning gatewaypi-blemidi \
-  gatewaypi-webui 2>/dev/null || true
+systemctl disable --now gatewaypi-kiosk gatewaypi-jack gatewaypi-tuning \
+  gatewaypi-blemidi gatewaypi-webui 2>/dev/null || true
 rm -f /etc/systemd/system/gatewaypi-*.service
 rm -f /etc/udev/rules.d/99-gatewaypi-usb-import.rules
 rm -f /etc/security/limits.d/95-gatewaypi-audio.conf

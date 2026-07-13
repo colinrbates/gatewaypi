@@ -1,0 +1,19 @@
+[Unit]
+Description=GatewayPi JACK server (owns the USB interface, clocks full-duplex)
+After=sound.target systemd-user-sessions.service
+Before=gatewaypi-kiosk.service
+
+[Service]
+User=@USER@
+# Realtime scheduling + locked memory for glitch-free audio.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Environment=JACK_NO_AUDIO_RESERVATION=1
+# 48 kHz, 128-frame period, 3 periods on the configured interface.
+# @JACKDEV@ is the ALSA card (e.g. hw:iTwo), substituted by install.sh.
+ExecStart=/usr/bin/jackd -R -P70 -dalsa -d@JACKDEV@ -r48000 -p128 -n3
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -70,8 +70,10 @@ installer is idempotent — safe to re-run after changing anything.
   or containing `IR`). Files land in `~/Captures` and `~/IRs` — plain folders
   in your home directory, next to `Desktop`, so you can also manage them in
   the file manager or over SSH/SFTP.
-- **AUDIO button**: in-window panel to pick the interface, buffer size and
-  sample rate, with a live readout of input/output channels and latency.
+- **AUDIO button**: in-window panel showing the live input/output channels
+  and latency. Audio runs through **JACK** (jackd owns the interface and
+  clocks full-duplex cleanly — raw ALSA drifts and warbles on some USB
+  interfaces); buffer/rate are set by the jackd service, not the app.
 - **Bluetooth pedal**: `sudo /opt/gatewaypi/bin/ble-pair.sh` once; it
   auto-reconnects from then on. USB needs nothing.
 
@@ -107,17 +109,16 @@ Presets are plain JSON in `/var/lib/gatewaypi/presets/`, named `NN-name.json`
 - **No input signal**: the installer masks PipeWire/PulseAudio so they can't
   grab the USB interface; if you re-enabled desktop audio, the amp and the
   desktop will fight over the device.
-- **Crackles/xruns**: the audio thread runs SCHED_FIFO/RR real-time (JUCE
-  patch + the @audio rtprio limit); confirm with
-  `ps -o tid,rtprio,cls -L -p $(pgrep -x gatewaypi)` — you should see one
-  thread with a non-empty RTPRIO and class RR/FF. If not, check `pi` is in
-  the `audio` group and `/etc/security/limits.d/95-gatewaypi-audio.conf`
-  exists. Confirm `threadirqs` is in `/boot/firmware/cmdline.txt`.
-- **Note on power**: a crackle that is ALSO present in a direct
-  `aplay -D hw:CARD=<iface>,DEV=0` test (bypassing the app) is hardware/
-  power — use the official 27W/5A Pi 5 supply or a powered USB hub for a
-  bus-powered interface. A crackle only through the app is the RT-thread
-  issue above.
+- **Crackle / warble / FM-like wobble**: audio runs through JACK precisely
+  to avoid this (raw ALSA full-duplex drifts on some USB interfaces). Check
+  jackd is up: `systemctl status gatewaypi-jack` and `jack_lsp -c` (you
+  should see `system:capture_1 -> NAMix:in_1` and `NAMix:out_1/2 ->
+  system:playback_1/2`). If jackd won't start, confirm the ALSA card id in
+  its unit (`-dhw:<id>`, from `cat /proc/asound/cards`) matches your
+  interface. Raise jackd's period (`-p256`) if it logs xruns under load.
+- **Note on power**: a crackle ALSO present in a direct
+  `aplay -D hw:CARD=<iface>,DEV=0` test (bypassing app + JACK) is hardware/
+  power — use the official 27W/5A Pi 5 supply or a powered USB hub.
 - **Boots to the Raspberry Pi desktop instead of the amp**: you're on a
   desktop image and installed with an older installer — run
   `sudo systemctl disable lightdm && sudo reboot` (or re-run `install.sh`,
@@ -145,7 +146,7 @@ uninstall.sh            remover
 patches/gatewaypi.patch small patch to upstream (hooks, tuner tap, kiosk editor)
 src/gatewaypi/          appliance layer: PresetManager, MidiEngine,
                         KioskShell + PresetBar, TunerEngine + overlay, Config
-system/                 systemd units, udev rule, RT limits, BLE scripts
+system/                 systemd units (incl. jackd), udev rule, RT limits, BLE scripts
 webui/upload_server.py  phone upload page (Python stdlib only)
 config/                 default config.json + 4 empty preset slots
 ```

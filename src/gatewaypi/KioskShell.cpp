@@ -432,6 +432,11 @@ int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
       auto setup = dm.getAudioDeviceSetup();
       setup.inputDeviceName = in;   // exact string from the input list
       setup.outputDeviceName = out;
+      // Debug: GATEWAYPI_NO_INPUT opens output-only, to isolate whether the
+      // warble/crackle is JUCE's full-duplex (linked read+write) path.
+      const bool noInput = std::getenv("GATEWAYPI_NO_INPUT") != nullptr;
+      if (noInput)
+        setup.inputDeviceName = {};
       setup.sampleRate = sampleRate;
       setup.bufferSize = bufferSize;
       setup.useDefaultInputChannels = false;
@@ -456,6 +461,43 @@ int gpTryOpenDevice(const juce::String &deviceNameContains, double sampleRate,
       if (err.isEmpty() && liveIn > 0)
         return liveIn;
     }
+  }
+  return 0;
+}
+
+// Open the JACK device (jackd owns the interface and does full-duplex
+// clocking properly, which raw ALSA on the iTwo does not). Returns live
+// input channel count. JUCE auto-connects its ports to the physical I/O.
+int gpTryOpenJack() {
+  auto *holder = juce::StandalonePluginHolder::getInstance();
+  if (holder == nullptr)
+    return 0;
+  holder->shouldMuteInput.setValue(false);
+  auto &dm = holder->deviceManager;
+  for (auto *type : dm.getAvailableDeviceTypes()) {
+    if (type->getTypeName() != "JACK")
+      continue;
+    type->scanForDevices();
+    const auto outs = type->getDeviceNames(false);
+    const auto ins = type->getDeviceNames(true);
+    if (outs.isEmpty())
+      return 0; // jackd not running yet
+    dm.setCurrentAudioDeviceType("JACK", true);
+    auto setup = dm.getAudioDeviceSetup();
+    setup.outputDeviceName = outs[0];
+    setup.inputDeviceName = ins.isEmpty() ? outs[0] : ins[0];
+    setup.useDefaultInputChannels = true;
+    setup.useDefaultOutputChannels = true;
+    const auto err = dm.setAudioDeviceSetup(setup, true);
+    auto *dev = dm.getCurrentAudioDevice();
+    const int liveIn =
+        dev ? dev->getActiveInputChannels().countNumberOfSetBits() : 0;
+    const int liveOut =
+        dev ? dev->getActiveOutputChannels().countNumberOfSetBits() : 0;
+    gpTrace("JACK open: out=\"" + setup.outputDeviceName + "\" in=\"" +
+            setup.inputDeviceName + "\" err=\"" + err + "\" liveIn=" +
+            juce::String(liveIn) + " liveOut=" + juce::String(liveOut));
+    return err.isEmpty() ? liveIn : 0;
   }
   return 0;
 }
@@ -495,17 +537,22 @@ void KioskShell::configureAudioDevice() {
   if (mUserSetAudio)
     return;
 
-  // Never permanently give up: the interface may be plugged in after boot,
-  // or come back after a glitch. Keep trying, but only log occasionally.
+  // Never permanently give up: jackd may still be starting, or the
+  // interface may be plugged in after boot. Keep trying, log occasionally.
   mAudioDeviceConfigured = false;
   const bool loud = (mConfigureAttempts++ % 10) == 0;
-  const int liveIn = gpTryOpenDevice(mConfig.audioDeviceMatch,
-                                     mConfig.sampleRate, mConfig.bufferSize);
+
+  // Prefer JACK (jackd owns the interface and clocks full-duplex cleanly);
+  // fall back to raw ALSA only if JACK isn't available.
+  int liveIn = gpTryOpenJack();
+  if (liveIn <= 0)
+    liveIn = gpTryOpenDevice(mConfig.audioDeviceMatch, mConfig.sampleRate,
+                             mConfig.bufferSize);
   if (liveIn > 0) {
     gpTrace("input live (" + juce::String(liveIn) + " ch)");
     mAudioDeviceConfigured = true;
   } else if (loud) {
-    gpTrace("waiting for interface matching \"" + mConfig.audioDeviceMatch +
+    gpTrace("waiting for JACK / interface \"" + mConfig.audioDeviceMatch +
             "\"...");
   }
 #endif

@@ -52,6 +52,7 @@ PKGS=(
   libgl1-mesa-dev libglu1-mesa-dev mesa-common-dev
   cage xwayland
   python3 bluez alsa-utils
+  jackd2 libjack-jackd2-0 libjack-jackd2-dev jack-tools
 )
 # freetype dev package name differs across Debian releases
 if apt-cache show libfreetype-dev > /dev/null 2>&1; then
@@ -183,6 +184,15 @@ for unit in gatewaypi-kiosk gatewaypi-tuning gatewaypi-blemidi gatewaypi-webui; 
   sed "s/@USER@/$APP_USER/g" "$BUNDLE_DIR/system/$unit.service" \
     > "/etc/systemd/system/$unit.service"
 done
+
+# jackd owns the interface and clocks full-duplex cleanly (raw ALSA on some
+# USB interfaces drifts and warbles). The ALSA card id comes from the
+# config's audioDeviceMatch (e.g. "iTwo" -> hw:iTwo).
+JACK_MATCH=$(python3 -c 'import json;print(json.load(open("'"$DATA"'/config.json")).get("audioDeviceMatch","iTwo"))' 2>/dev/null)
+[ -n "$JACK_MATCH" ] || JACK_MATCH=iTwo
+sed "s/@USER@/$APP_USER/g; s#@JACKDEV@#hw:$JACK_MATCH#g" \
+  "$BUNDLE_DIR/system/gatewaypi-jack.service" > /etc/systemd/system/gatewaypi-jack.service
+
 install -m 644 "$BUNDLE_DIR/system/gatewaypi-usb-import@.service" /etc/systemd/system/
 install -m 644 "$BUNDLE_DIR/system/99-gatewaypi-usb-import.rules" /etc/udev/rules.d/
 
@@ -212,7 +222,8 @@ if [ -L /etc/systemd/system/display-manager.service ]; then
   echo "    (restore the desktop anytime: sudo systemctl enable $DM && sudo reboot)"
 fi
 
-systemctl enable gatewaypi-kiosk gatewaypi-tuning gatewaypi-blemidi gatewaypi-webui
+systemctl enable gatewaypi-jack gatewaypi-kiosk gatewaypi-tuning \
+  gatewaypi-blemidi gatewaypi-webui
 systemctl set-default graphical.target > /dev/null
 
 cat << EOF
