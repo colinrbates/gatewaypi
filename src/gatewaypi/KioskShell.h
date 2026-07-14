@@ -174,6 +174,10 @@ public:
   void resized() override;
   void paint(juce::Graphics &g) override;
   void refreshDevices();
+  // Timer (which polls device state, incl. a JACK scan) runs ONLY while the
+  // panel is visible — a hidden component's timer otherwise keeps opening
+  // JACK clients forever, wasting CPU and crashing at teardown.
+  void visibilityChanged() override;
   std::function<void()> onClose;
 
 private:
@@ -192,6 +196,7 @@ private:
   juce::String mSelectedName;
   int mInputMask = 1;         // bits 0/1 -> device capture channels (In 1 default)
   int mBufSel = 128;
+  bool mJackCached = false;   // JACK availability, refreshed only on open
   static constexpr double kRate = 48000.0; // NAM native; fixed
 };
 

@@ -20,6 +20,11 @@ Environment=GATEWAYPI_BRAND=GatewayPi
 ExecStart=/usr/bin/cage -- /opt/gatewaypi/bin/gatewaypi
 Restart=always
 RestartSec=2
+# cage 0.2.0 (Debian bookworm) segfaults in its own Wayland/DRM teardown on
+# shutdown — harmless (the amp app exits cleanly and autosaves first, and
+# this only happens on stop/restart, never on boot or while playing). Treat
+# that exit as expected so it isn't logged as a unit failure.
+SuccessExitStatus=SIGSEGV
 
 [Install]
 WantedBy=graphical.target

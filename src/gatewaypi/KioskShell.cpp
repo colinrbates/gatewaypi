@@ -883,15 +883,26 @@ AudioPanel::AudioPanel(const Config &config) : mConfig(config) {
       onClose();
   };
   addAndMakeVisible(mClose);
+  // Timer is started/stopped in visibilityChanged — NOT here — so it never
+  // runs (and never scans JACK) while the panel is hidden.
+}
 
-  refreshDevices();
-  startTimerHz(2); // keep the status line honest
+void AudioPanel::visibilityChanged() {
+#if JucePlugin_Build_Standalone
+  if (isVisible()) {
+    refreshDevices();   // one JACK scan on open, cached below
+    startTimerHz(2);    // keep the status line honest while open
+  } else {
+    stopTimer();
+  }
+#endif
 }
 
 void AudioPanel::rebuildDeviceButtons() {
 #if JucePlugin_Build_Standalone
   mDeviceButtons.clear();
-  const bool jack = gpJackAvailable();
+  mJackCached = gpJackAvailable(); // the one scan per open; cached for the timer
+  const bool jack = mJackCached;
   for (const auto &name : gpListDuplexDevices()) {
     // Show the friendly card name (before the first ';'/','), not the raw
     // ALSA hint — but key actions off the full name.
@@ -925,7 +936,7 @@ void AudioPanel::reopen() {
 
   // Under JACK, jackd owns the device: (re)connect through the JACK path and
   // never touch raw ALSA (which would steal the card and drop the audio).
-  if (gpJackAvailable()) {
+  if (mJackCached) {
     const int liveIn = gpTryOpenJack();
     gpTrace("panel reopen via JACK -> liveIn=" + juce::String(liveIn));
     timerCallback();
@@ -972,7 +983,8 @@ void AudioPanel::timerCallback() {
 
   // Buffer and input-channel routing are owned by jackd when on JACK, so
   // grey those controls out and say so rather than letting them break audio.
-  const bool jack = gpJackAvailable();
+  // Use the cached flag (set on open) — never scan JACK from this 2 Hz timer.
+  const bool jack = mJackCached;
   mBufHeader.setText(jack ? juce::String("BUFFER / RATE  \xc2\xb7  managed by JACK")
                           : juce::String::fromUTF8(
                                 "BUFFER  (LOWER = LESS LATENCY)  \xc2\xb7  48 kHz"),
