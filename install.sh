@@ -190,7 +190,19 @@ done
 # config's audioDeviceMatch (e.g. "iTwo" -> hw:iTwo).
 JACK_MATCH=$(python3 -c 'import json;print(json.load(open("'"$DATA"'/config.json")).get("audioDeviceMatch","iTwo"))' 2>/dev/null)
 [ -n "$JACK_MATCH" ] || JACK_MATCH=iTwo
-sed "s/@USER@/$APP_USER/g; s#@JACKDEV@#hw:$JACK_MATCH#g" \
+
+# JACK period scales to the board: the Pi 5 has headroom for a tight 128-frame
+# period (~2.7 ms); the slower Pi 4 needs 256 (~5.3 ms) to avoid xruns under
+# the NAM + IR load. Unknown boards get the safe larger value.
+PI_MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo unknown)
+case "$PI_MODEL" in
+  *"Pi 5"*) JACK_PERIOD=128 ;;
+  *"Pi 4"*) JACK_PERIOD=256 ;;
+  *)        JACK_PERIOD=256 ;;
+esac
+echo "    board: $PI_MODEL -> JACK period $JACK_PERIOD"
+
+sed "s/@USER@/$APP_USER/g; s#@JACKDEV@#hw:$JACK_MATCH#g; s/@JACKPERIOD@/$JACK_PERIOD/g" \
   "$BUNDLE_DIR/system/gatewaypi-jack.service" > /etc/systemd/system/gatewaypi-jack.service
 
 install -m 644 "$BUNDLE_DIR/system/gatewaypi-usb-import@.service" /etc/systemd/system/

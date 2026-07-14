@@ -208,10 +208,28 @@ private:
       key = makeKey(kPC, m.getProgramChangeNumber());
     else if (m.isController() && m.getControllerValue() >= 64)
       key = makeKey(kCC, m.getControllerNumber());
-    else if (m.isNoteOn())
+    else if (m.isNoteOnOrOff())
+      // Footswitches often send Note-On OR Note-Off (many pedals, incl. the
+      // M-Vave Chocolate in its default mode, emit only a velocity-0 note
+      // per press, which reads as Note-Off). Accept either; a debounce below
+      // collapses a momentary pedal's on+off pair into one action.
       key = makeKey(kNote, m.getNoteNumber());
     if (key < 0)
       return;
+
+    // Debounce: ignore a repeat of the SAME message within 250 ms, so a
+    // momentary switch that sends note-on (press) + note-off (release) fires
+    // just once. (Pedals that send one event per press are unaffected.)
+    {
+      const juce::uint32 now = juce::Time::getMillisecondCounter();
+      const std::scoped_lock lock(mLock);
+      if (!mLearnTarget.has_value()) {
+        const auto prev = mLastFire.find(key);
+        if (prev != mLastFire.end() && now - prev->second < 250)
+          return;
+        mLastFire[key] = now;
+      }
+    }
 
     MidiAction action;
     {
@@ -260,6 +278,7 @@ private:
 
   mutable std::mutex mLock;
   std::map<int, MidiAction> mBindings;
+  std::map<int, juce::uint32> mLastFire; // per-message debounce timestamps
   std::optional<MidiAction> mLearnTarget;
   std::function<void(juce::String)> mOnLearned;
 };

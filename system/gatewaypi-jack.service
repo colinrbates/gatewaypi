@@ -9,9 +9,10 @@ User=@USER@
 LimitRTPRIO=95
 LimitMEMLOCK=infinity
 Environment=JACK_NO_AUDIO_RESERVATION=1
-# 48 kHz, 128-frame period, 3 periods on the configured interface.
-# @JACKDEV@ is the ALSA card (e.g. hw:iTwo), substituted by install.sh.
-ExecStart=/usr/bin/jackd -R -P70 -dalsa -d@JACKDEV@ -r48000 -p128 -n3
+# 48 kHz on the configured interface. @JACKDEV@ (ALSA card, e.g. hw:iTwo)
+# and @JACKPERIOD@ (frames/period — 128 on Pi 5, 256 on Pi 4 for headroom)
+# are substituted by install.sh based on the detected Pi model.
+ExecStart=/usr/bin/jackd -R -P70 -dalsa -d@JACKDEV@ -r48000 -p@JACKPERIOD@ -n3
 Restart=always
 RestartSec=2
 

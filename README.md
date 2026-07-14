@@ -14,7 +14,8 @@ shell, boot-to-app system integration, and model/IR import.
 
 | Part | Notes |
 |---|---|
-| Raspberry Pi 5 (4 GB+) | with the official Active Cooler |
+| Raspberry Pi 5 (4 GB+) | recommended, with the official Active Cooler |
+| Raspberry Pi 4 (4 GB+) | supported — installer auto-uses a larger JACK buffer (256) for headroom |
 | Class-compliant USB audio interface | e.g. PreSonus AudioBox iTwo — instrument input, gain knobs |
 | Raspberry Pi Touch Display 2 | 7″ DSI, or any touchscreen |
 | M-Vave Chocolate | USB (recommended on stage) or Bluetooth |
